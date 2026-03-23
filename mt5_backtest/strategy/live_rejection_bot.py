@@ -193,8 +193,8 @@ def place_trade(symbol, side, lot, price, atr_value, tp_multiplier=4.0):
     if result.retcode != mt5.TRADE_RETCODE_DONE:
         logger.error(f"Trade failed: {result.comment}")
         return False
-    logger.info(f"{symbol} {direction} {lot} lot executed at {price}")
-    send_telegram(f"{direction} {lot} {symbol} at {price}")
+    logger.info(f"{symbol} {side} {lot} lot executed at {price}")
+    send_telegram(f"{side} {lot} {symbol} at {price}")
     return True
 
 def close_all_positions(symbol):
