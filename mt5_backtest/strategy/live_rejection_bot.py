@@ -1,25 +1,29 @@
-# pro_hybrid_bot.py
 import sys
 import os
 import time
 import pandas as pd
 import numpy as np
-from decimal import Decimal
 import MetaTrader5 as mt5
 
 # Add project root for utils imports
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(project_root)
 
-from utils.indicators import atr, rsi, bollinger_bands
-from utils.logger import get_logger
-from utils.telegram_alerts import send_telegram
+# Ensure these utils exist in your folder structure
+try:
+    from utils.indicators import atr, rsi, bollinger_bands
+    from utils.logger import get_logger
+    from utils.telegram_alerts import send_telegram
+except ImportError:
+    # Fallback for demonstration if utils are missing
+    print("Warning: Utils not found. Ensure utils folder is present.")
 
 logger = get_logger()
-SYMBOLS = ["XAUUSD_"]
+SYMBOLS = ["XAUUSD_"]  # Ensure this matches your broker's suffix
 TIMEFRAME = mt5.TIMEFRAME_M1
 MAX_LOSS = 350
-CHECK_INTERVAL = 60  # seconds
+CHECK_INTERVAL = 60  
+MAGIC_NUMBER = 123456
 
 # Connect MT5
 if not mt5.initialize():
@@ -28,18 +32,16 @@ if not mt5.initialize():
 else:
     logger.info("PRO Hybrid Bot connected to MT5 successfully")
 
-# Store positions and pending orders
-positions = {sym: [] for sym in SYMBOLS}
-pending_orders = {sym: [] for sym in SYMBOLS}
-
 def fetch_data(symbol, bars=200):
     rates = mt5.copy_rates_from_pos(symbol, TIMEFRAME, 0, bars)
+    if rates is None: return pd.DataFrame()
     df = pd.DataFrame(rates)
     df['time'] = pd.to_datetime(df['time'], unit='s')
     df.set_index('time', inplace=True)
     return df
 
 def calculate_indicators(df):
+    if df.empty: return df
     df['atr'] = atr(df, 14)
     df['rsi'] = rsi(df['close'], 14)
     df['bb_upper'], df['bb_lower'] = bollinger_bands(df['close'], 20, 2)
@@ -47,133 +49,143 @@ def calculate_indicators(df):
     df['ema200'] = df['close'].ewm(span=200).mean()
     return df
 
-def collective_floating_pnl(symbol):
-    total = 0
-    tick = mt5.symbol_info_tick(symbol)
-    for pos in positions[symbol]:
-        if pos['type'] == 'BUY':
-            total += (tick.bid - pos['price']) * pos['lot'] * 100
-        else:
-            total += (pos['price'] - tick.ask) * pos['lot'] * 100
-    return total
+def get_total_floating_pnl(symbol):
+    """Reads live PnL directly from MT5 terminal."""
+    positions = mt5.positions_get(symbol=symbol, magic=MAGIC_NUMBER)
+    if positions is None: return 0.0
+    return sum(pos.profit + pos.swap + pos.commission for pos in positions)
 
 def dynamic_lot(symbol, atr_value):
     base_lot = 0.5
-    return round(base_lot * 20 / max(atr_value, 1), 2)  # smaller lot for higher ATR
+    # Risk adjustment: higher ATR = lower lot size
+    lot = round(base_lot * 20 / max(atr_value, 1.0), 2)
+    return max(0.01, lot) # Minimum 0.01
 
-def place_trade(symbol, direction, lot, price):
+def modify_sl(ticket, sl, tp):
+    request = {
+        "action": mt5.TRADE_ACTION_SLTP,
+        "position": ticket,
+        "sl": round(sl, 2),
+        "tp": round(tp, 2),
+    }
+    return mt5.order_send(request)
+
+def set_break_even(symbol, atr_value, multiplier=1.2):
+    positions = mt5.positions_get(symbol=symbol, magic=MAGIC_NUMBER)
+    if not positions: return
+    
+    for pos in positions:
+        tick = mt5.symbol_info_tick(symbol)
+        if pos.type == mt5.POSITION_TYPE_BUY:
+            if (tick.bid - pos.price_open) >= (atr_value * multiplier) and pos.sl < pos.price_open:
+                modify_sl(pos.ticket, pos.price_open + 0.10, pos.tp)
+        elif pos.type == mt5.POSITION_TYPE_SELL:
+            if (pos.price_open - tick.ask) >= (atr_value * multiplier) and (pos.sl > pos.price_open or pos.sl == 0):
+                modify_sl(pos.ticket, pos.price_open - 0.10, pos.tp)
+
+def update_trailing_stop(symbol, atr_value, multiplier=1.5):
+    positions = mt5.positions_get(symbol=symbol, magic=MAGIC_NUMBER)
+    if not positions: return
+    
+    trail_dist = atr_value * multiplier
+    for pos in positions:
+        tick = mt5.symbol_info_tick(symbol)
+        if pos.type == mt5.POSITION_TYPE_BUY:
+            new_sl = round(tick.bid - trail_dist, 2)
+            if new_sl > pos.sl:
+                modify_sl(pos.ticket, new_sl, pos.tp)
+        elif pos.type == mt5.POSITION_TYPE_SELL:
+            new_sl = round(tick.ask + trail_dist, 2)
+            if new_sl < pos.sl or pos.sl == 0:
+                modify_sl(pos.ticket, new_sl, pos.tp)
+
+def place_trade(symbol, direction, lot, price, atr_value):
     order_type = mt5.ORDER_TYPE_BUY if direction == 'BUY' else mt5.ORDER_TYPE_SELL
-    sl = price - 2 * atr_value if direction == 'BUY' else price + 2 * atr_value
-    tp = price + 4 * atr_value if direction == 'BUY' else price - 4 * atr_value
+    sl = price - (2 * atr_value) if direction == 'BUY' else price + (2 * atr_value)
+    tp = price + (4 * atr_value) if direction == 'BUY' else price - (4 * atr_value)
 
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
         "symbol": symbol,
-        "volume": lot,
+        "volume": float(lot),
         "type": order_type,
-        "price": price,
-        "sl": sl,
-        "tp": tp,
+        "price": float(price),
+        "sl": float(round(sl, 2)),
+        "tp": float(round(tp, 2)),
         "deviation": 10,
-        "magic": 123456,
+        "magic": MAGIC_NUMBER,
         "comment": "PRO Hybrid Bot",
         "type_filling": mt5.ORDER_FILLING_FOK
     }
 
     result = mt5.order_send(request)
-    if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
-        logger.error(f"{symbol} Trade failed: {result}")
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        logger.error(f"Trade failed: {result.comment}")
         return False
-
-    logger.info(f"{symbol} {direction} {lot} lot executed at {price}")
-    send_telegram(f"{symbol} {direction} {lot} lot executed at {price}")
-    positions[symbol].append({"type": direction, "lot": lot, "price": price})
+    
+    send_telegram(f"✅ {direction} {lot} {symbol} at {price}")
     return True
 
-def check_pending(symbol, tick):
-    for po in pending_orders[symbol][:]:
-        if po['type'] == "BUYSTOP" and tick.ask >= po['price']:
-            logger.info(f"{symbol} BUYSTOP triggered at {po['price']}")
-            place_trade(symbol, "BUY", po['lot'], po['price'])
-            pending_orders[symbol].remove(po)
-        elif po['type'] == "SELLSTOP" and tick.bid <= po['price']:
-            logger.info(f"{symbol} SELLSTOP triggered at {po['price']}")
-            place_trade(symbol, "SELL", po['lot'], po['price'])
-            pending_orders[symbol].remove(po)
-
-def close_all_positions(symbol, magic=123456):
-    """Closes all open positions for a specific symbol and magic number."""
-    # Fetch only open positions for this symbol
-    open_positions = mt5.positions_get(symbol=symbol)
+def close_all_positions(symbol):
+    positions = mt5.positions_get(symbol=symbol, magic=MAGIC_NUMBER)
+    if not positions: return
     
-    if open_positions is None:
-        logger.info(f"No positions to close for {symbol}")
-        return
+    for pos in positions:
+        tick = mt5.symbol_info_tick(symbol)
+        type_close = mt5.ORDER_TYPE_SELL if pos.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY
+        price_close = tick.bid if pos.type == mt5.POSITION_TYPE_BUY else tick.ask
+        
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": symbol,
+            "volume": pos.volume,
+            "type": type_close,
+            "position": pos.ticket,
+            "price": price_close,
+            "magic": MAGIC_NUMBER,
+            "type_filling": mt5.ORDER_FILLING_FOK,
+        }
+        mt5.order_send(request)
 
-    for pos in open_positions:
-        # Filter by magic number to ensure we don't close manual trades
-        if pos.magic == magic:
-            tick = mt5.symbol_info_tick(symbol)
-            
-            # Determine opposite type for closing
-            type_close = mt5.ORDER_TYPE_SELL if pos.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY
-            price_close = tick.bid if pos.type == mt5.POSITION_TYPE_BUY else tick.ask
-
-            request = {
-                "action": mt5.TRADE_ACTION_DEAL,
-                "symbol": symbol,
-                "volume": pos.volume,
-                "type": type_close,
-                "position": pos.ticket, # Crucial: links the close to the specific open trade
-                "price": price_close,
-                "deviation": 10,
-                "magic": magic,
-                "comment": "Close All - Max Loss Hit",
-                "type_filling": mt5.ORDER_FILLING_FOK,
-            }
-
-            result = mt5.order_send(request)
-            if result.retcode != mt5.TRADE_RETCODE_DONE:
-                logger.error(f"Failed to close position {pos.ticket}: {result.comment}")
-            else:
-                logger.info(f"Successfully closed position {pos.ticket}")
-# Main Loop
+# --- MAIN LOOP ---
 while True:
-    for sym in SYMBOLS:
-        df = fetch_data(sym)
-        df = calculate_indicators(df)
-        last = df.iloc[-1]
-        prev = df.iloc[-2]
+    try:
+        for sym in SYMBOLS:
+            df = fetch_data(sym)
+            if df.empty: continue
+            
+            df = calculate_indicators(df)
+            last = df.iloc[-1]
+            atr_v = last['atr']
 
-        logger.info(f"{sym} | Price:{last['close']:.2f} EMA9:{last['ema9']:.2f} EMA200:{last['ema200']:.2f} ATR:{last['atr']:.2f} RSI:{last['rsi']:.2f}")
+            # 1. PnL Monitor
+            pnl = get_total_floating_pnl(sym)
+            logger.info(f"{sym} | Price: {last['close']:.2f} | PnL: {pnl:.2f}")
 
-        floating_pnl = collective_floating_pnl(sym)
-        logger.info(f"{sym} Floating PnL: {floating_pnl:.2f}")
+            if pnl <= -MAX_LOSS:
+                logger.warning("Emergency Stop Triggered!")
+                close_all_positions(sym)
+                time.sleep(300)
+                continue
 
-        if floating_pnl <= -MAX_LOSS:
-            logger.info(f"{sym} Max loss reached, closing all positions")
-            send_telegram(f"{sym} Max loss reached, closing all positions")
-            # close logic here...
-            # 1. Physically close trades on the MT5 Server
-            close_all_positions(sym)
-            positions[sym].clear()
-            pending_orders[sym].clear()
-            continue
+            # 2. Trade Management
+            set_break_even(sym, atr_v)
+            update_trailing_stop(sym, atr_v)
 
-        atr_value = last['atr']
-        lot = dynamic_lot(sym, atr_value)
+            # 3. New Entry Logic
+            open_pos = mt5.positions_get(symbol=sym, magic=MAGIC_NUMBER)
+            if not open_pos:
+                lot_size = dynamic_lot(sym, atr_v)
+                
+                # BUY: Trend up, Oversold, at Support
+                if last['ema9'] > last['ema200'] and last['rsi'] <= 35 and last['close'] <= last['bb_lower'] * 1.005:
+                    place_trade(sym, "BUY", lot_size, last['close'], atr_v)
+                
+                # SELL: Trend down, Overbought, at Resistance
+                elif last['ema9'] < last['ema200'] and last['rsi'] >= 65 and last['close'] >= last['bb_upper'] * 0.995:
+                    place_trade(sym, "SELL", lot_size, last['close'], atr_v)
 
-        # Trend-based Rejection Logic
-        # SELL: EMA9 < EMA200, RSI > 65, close near BB_upper
-        if last['ema9'] < last['ema200'] and last['rsi'] >= 65 and last['close'] >= last['bb_upper']*0.995:
-            place_trade(sym, "SELL", lot, last['close'])
-
-        # BUY: EMA9 > EMA200, RSI < 35, close near BB_lower
-        elif last['ema9'] > last['ema200'] and last['rsi'] <= 35 and last['close'] <= last['bb_lower']*1.005:
-            place_trade(sym, "BUY", lot, last['close'])
-
-        # Check pending orders
-        tick = mt5.symbol_info_tick(sym)
-        check_pending(sym, tick)
-
+    except Exception as e:
+        logger.error(f"Loop Error: {e}")
+    
     time.sleep(CHECK_INTERVAL)
