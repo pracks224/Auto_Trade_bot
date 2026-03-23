@@ -94,21 +94,44 @@ def set_break_even(symbol, atr_value, multiplier=1.2):
             if (pos.price_open - tick.ask) >= (atr_value * multiplier) and (pos.sl > pos.price_open or pos.sl == 0):
                 modify_sl(pos.ticket, pos.price_open - 0.10, pos.tp)
 
-def update_trailing_stop(symbol, atr_value, multiplier=1.5):
+ddef update_trailing_stop(symbol, atr_value, trail_multiplier=1.5):
     positions = mt5.positions_get(symbol=symbol, magic=MAGIC_NUMBER)
-    if not positions: return
-    
-    trail_dist = atr_value * multiplier
+    if not positions:
+        return
+
+    # Get symbol decimal digits (e.g., 2 for Gold)
+    symbol_info = mt5.symbol_info(symbol)
+    digits = symbol_info.digits
+    trail_dist = atr_value * trail_multiplier
+
     for pos in positions:
         tick = mt5.symbol_info_tick(symbol)
+        new_sl = 0.0
+
         if pos.type == mt5.POSITION_TYPE_BUY:
-            new_sl = round(tick.bid - trail_dist, 2)
-            if new_sl > pos.sl:
-                modify_sl(pos.ticket, new_sl, pos.tp)
+            target_sl = tick.bid - trail_dist
+            # Only move SL UP
+            if target_sl > pos.sl + 0.01: # Small buffer to avoid spamming
+                new_sl = target_sl
+                
         elif pos.type == mt5.POSITION_TYPE_SELL:
-            new_sl = round(tick.ask + trail_dist, 2)
-            if new_sl < pos.sl or pos.sl == 0:
-                modify_sl(pos.ticket, new_sl, pos.tp)
+            target_sl = tick.ask + trail_dist
+            # Only move SL DOWN (or set it if currently 0)
+            if target_sl < pos.sl or pos.sl == 0:
+                new_sl = target_sl
+
+        if new_sl > 0:
+            request = {
+                "action": mt5.TRADE_ACTION_SLTP,
+                "symbol": symbol,
+                "position": pos.ticket,
+                "sl": float(round(new_sl, digits)), # Force float and correct decimals
+                "tp": float(pos.tp),               # Always include current TP
+                "magic": MAGIC_NUMBER
+            }
+            result = mt5.order_send(request)
+            if result.retcode != mt5.TRADE_RETCODE_DONE:
+                logger.error(f"Trailing SL failed: {result.comment} (Code: {result.retcode})")
 
 def place_trade(symbol, direction, lot, price, atr_value):
     order_type = mt5.ORDER_TYPE_BUY if direction == 'BUY' else mt5.ORDER_TYPE_SELL
