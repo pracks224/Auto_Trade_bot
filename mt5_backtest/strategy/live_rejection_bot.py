@@ -101,6 +101,42 @@ def check_pending(symbol, tick):
             place_trade(symbol, "SELL", po['lot'], po['price'])
             pending_orders[symbol].remove(po)
 
+def close_all_positions(symbol, magic=123456):
+    """Closes all open positions for a specific symbol and magic number."""
+    # Fetch only open positions for this symbol
+    open_positions = mt5.positions_get(symbol=symbol)
+    
+    if open_positions is None:
+        logger.info(f"No positions to close for {symbol}")
+        return
+
+    for pos in open_positions:
+        # Filter by magic number to ensure we don't close manual trades
+        if pos.magic == magic:
+            tick = mt5.symbol_info_tick(symbol)
+            
+            # Determine opposite type for closing
+            type_close = mt5.ORDER_TYPE_SELL if pos.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY
+            price_close = tick.bid if pos.type == mt5.POSITION_TYPE_BUY else tick.ask
+
+            request = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": symbol,
+                "volume": pos.volume,
+                "type": type_close,
+                "position": pos.ticket, # Crucial: links the close to the specific open trade
+                "price": price_close,
+                "deviation": 10,
+                "magic": magic,
+                "comment": "Close All - Max Loss Hit",
+                "type_filling": mt5.ORDER_FILLING_FOK,
+            }
+
+            result = mt5.order_send(request)
+            if result.retcode != mt5.TRADE_RETCODE_DONE:
+                logger.error(f"Failed to close position {pos.ticket}: {result.comment}")
+            else:
+                logger.info(f"Successfully closed position {pos.ticket}")
 # Main Loop
 while True:
     for sym in SYMBOLS:
@@ -118,6 +154,8 @@ while True:
             logger.info(f"{sym} Max loss reached, closing all positions")
             send_telegram(f"{sym} Max loss reached, closing all positions")
             # close logic here...
+            # 1. Physically close trades on the MT5 Server
+            close_all_positions(sym)
             positions[sym].clear()
             pending_orders[sym].clear()
             continue
