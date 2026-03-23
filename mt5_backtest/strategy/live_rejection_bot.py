@@ -50,10 +50,21 @@ def calculate_indicators(df):
     return df
 
 def get_total_floating_pnl(symbol):
-    """Reads live PnL directly from MT5 terminal."""
+    """Reads live PnL directly from MT5 terminal with safety defaults."""
     positions = mt5.positions_get(symbol=symbol, magic=MAGIC_NUMBER)
-    if positions is None: return 0.0
-    return sum(pos.profit + pos.swap + pos.commission for pos in positions)
+    if not positions: 
+        return 0.0
+        
+    total_pnl = 0.0
+    for pos in positions:
+        # Use getattr(obj, 'attr', default) to prevent 'No attribute' errors
+        profit = getattr(pos, 'profit', 0.0)
+        swap = getattr(pos, 'swap', 0.0)
+        comm = getattr(pos, 'commission', 0.0) 
+        
+        total_pnl += (profit + swap + comm)
+        
+    return total_pnl
 
 def dynamic_lot(symbol, atr_value):
     base_lot = 0.5
@@ -122,8 +133,8 @@ def place_trade(symbol, direction, lot, price, atr_value):
     if result.retcode != mt5.TRADE_RETCODE_DONE:
         logger.error(f"Trade failed: {result.comment}")
         return False
-    
-    send_telegram(f"✅ {direction} {lot} {symbol} at {price}")
+    logger.info(f"{symbol} {direction} {lot} lot executed at {price}")
+    send_telegram(f"{direction} {lot} {symbol} at {price}")
     return True
 
 def close_all_positions(symbol):
@@ -160,10 +171,15 @@ while True:
 
             # 1. PnL Monitor
             pnl = get_total_floating_pnl(sym)
-            logger.info(f"{sym} | Price: {last['close']:.2f} | PnL: {pnl:.2f}")
+            logger.info(
+                f"[{sym}] Price: {last['close']:.2f} | "
+                f"RSI: {last['rsi']:.1f} | "
+                f"EMA9/200: {last['ema9']:.1f}/{last['ema200']:.1f} | "
+                f"PnL: ${pnl:.2f}"
+            )
 
             if pnl <= -MAX_LOSS:
-                logger.warning("Emergency Stop Triggered!")
+                logger.error(f"!!! MAX LOSS HIT (${pnl:.2f}) !!! Closing all.")
                 close_all_positions(sym)
                 time.sleep(300)
                 continue
