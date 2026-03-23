@@ -94,7 +94,7 @@ def set_break_even(symbol, atr_value, multiplier=1.2):
             if (pos.price_open - tick.ask) >= (atr_value * multiplier) and (pos.sl > pos.price_open or pos.sl == 0):
                 modify_sl(pos.ticket, pos.price_open - 0.10, pos.tp)
 
-ddef update_trailing_stop(symbol, atr_value, trail_multiplier=1.5):
+def update_trailing_stop(symbol, atr_value, trail_multiplier=1.5):
     positions = mt5.positions_get(symbol=symbol, magic=MAGIC_NUMBER)
     if not positions:
         return
