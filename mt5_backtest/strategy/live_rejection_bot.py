@@ -67,10 +67,23 @@ def get_total_floating_pnl(symbol):
     return total_pnl
 
 def dynamic_lot(symbol, atr_value):
+    """Calculates lot size based on ATR but never exceeds 1.00 lot."""
     base_lot = 0.5
-    # Risk adjustment: higher ATR = lower lot size
-    lot = round(base_lot * 20 / max(atr_value, 1.0), 2)
-    return max(0.01, lot) # Minimum 0.01
+    # A risk divider of 2.0 or 3.0 will make the bot more conservative
+    risk_divider = 2.5 
+    
+    # Calculate the raw lot based on volatility
+    raw_lot = (base_lot * 20 / max(atr_value, 1.0)) / risk_divider
+    
+    # 1. Round to 2 decimals for MT5
+    lot = round(raw_lot, 2)
+    
+    # 2. APPLY THE 1.0 LOT CEILING (The most important part)
+    if lot > 1.0:
+        lot = 1.0
+        
+    # 3. Ensure it's at least the broker minimum (0.01)
+    return max(0.01, lot)
 
 def modify_sl(ticket, sl, tp):
     request = {
@@ -99,44 +112,56 @@ def update_trailing_stop(symbol, atr_value, trail_multiplier=1.5):
     if not positions:
         return
 
-    # Get symbol decimal digits (e.g., 2 for Gold)
     symbol_info = mt5.symbol_info(symbol)
     digits = symbol_info.digits
+    # Gold (XAUUSD) often needs a wider trail than 1.5 ATR due to volatility
     trail_dist = atr_value * trail_multiplier
 
     for pos in positions:
         tick = mt5.symbol_info_tick(symbol)
+        if not tick: continue
+        
         new_sl = 0.0
+        current_sl = pos.sl
 
+        # BUY POSITION LOGIC
         if pos.type == mt5.POSITION_TYPE_BUY:
             target_sl = tick.bid - trail_dist
-            # Only move SL UP
-            if target_sl > pos.sl + 0.01: # Small buffer to avoid spamming
+            # Move UP if target is higher than current SL AND current price is moving away
+            if target_sl > current_sl + 0.05: # Minimal 5-cent move to avoid spam
                 new_sl = target_sl
                 
+        # SELL POSITION LOGIC
         elif pos.type == mt5.POSITION_TYPE_SELL:
             target_sl = tick.ask + trail_dist
-            # Only move SL DOWN (or set it if currently 0)
-            if target_sl < pos.sl or pos.sl == 0:
+            # If current_sl is 0 (no SL) or the new target is LOWER than current SL
+            if current_sl == 0 or target_sl < current_sl - 0.05:
                 new_sl = target_sl
 
+        # Only send request if we have a valid update
         if new_sl > 0:
+            # Final Safety: Ensure we don't move SL into a worse position than current price
+            # (Wait for price to move at least 1 ATR before trailing begins)
             request = {
                 "action": mt5.TRADE_ACTION_SLTP,
                 "symbol": symbol,
                 "position": pos.ticket,
-                "sl": float(round(new_sl, digits)), # Force float and correct decimals
-                "tp": float(pos.tp),               # Always include current TP
+                "sl": float(round(new_sl, digits)),
+                "tp": float(pos.tp),
                 "magic": MAGIC_NUMBER
             }
+            
             result = mt5.order_send(request)
-            if result.retcode != mt5.TRADE_RETCODE_DONE:
-                logger.error(f"Trailing SL failed: {result.comment} (Code: {result.retcode})")
+            if result.retcode == mt5.TRADE_RETCODE_DONE:
+                logger.info(f"📈 TRAIL MOVED: {symbol} {pos.ticket} | New SL: {new_sl:.2f}")
+            else:
+                # This will tell you if you are too close to the price (Code 10016)
+                logger.warning(f"⚠️ TRAIL REJECTED: {result.comment} (Code: {result.retcode})")
 
 def place_trade(symbol, direction, lot, price, atr_value):
     order_type = mt5.ORDER_TYPE_BUY if direction == 'BUY' else mt5.ORDER_TYPE_SELL
     sl = price - (2 * atr_value) if direction == 'BUY' else price + (2 * atr_value)
-    tp = price + (4 * atr_value) if direction == 'BUY' else price - (4 * atr_value)
+    tp = price + (2.5* atr_value) if direction == 'BUY' else price - (2.5 * atr_value)
 
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
