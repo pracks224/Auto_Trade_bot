@@ -153,21 +153,33 @@ def update_trailing_stop(symbol, atr_value, trail_multiplier=1.5):
             
             result = mt5.order_send(request)
             if result.retcode == mt5.TRADE_RETCODE_DONE:
-                logger.info(f"📈 TRAIL MOVED: {symbol} {pos.ticket} | New SL: {new_sl:.2f}")
+                logger.info(f" TRAIL MOVED: {symbol} {pos.ticket} | New SL: {new_sl:.2f}")
             else:
                 # This will tell you if you are too close to the price (Code 10016)
-                logger.warning(f"⚠️ TRAIL REJECTED: {result.comment} (Code: {result.retcode})")
+                logger.warning(f" TRAIL REJECTED: {result.comment} (Code: {result.retcode})")
 
-def place_trade(symbol, direction, lot, price, atr_value):
-    order_type = mt5.ORDER_TYPE_BUY if direction == 'BUY' else mt5.ORDER_TYPE_SELL
-    sl = price - (2 * atr_value) if direction == 'BUY' else price + (2 * atr_value)
-    tp = price + (2.5* atr_value) if direction == 'BUY' else price - (2.5 * atr_value)
+def place_trade(symbol, side, lot, price, atr_value, tp_multiplier=4.0):
+    """
+    Executes a trade with a dynamic SL and a customizable TP multiplier.
+    """
+    # Standard 1.5x ATR Stop Loss
+    sl_dist = atr_value * 1.5
+    tp_dist = atr_value * tp_multiplier
+    
+    if side == "BUY":
+        sl = price - sl_dist
+        tp = price + tp_dist
+        type_mt5 = mt5.ORDER_TYPE_BUY
+    else:
+        sl = price + sl_dist
+        tp = price - tp_dist
+        type_mt5 = mt5.ORDER_TYPE_SELL
 
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
         "symbol": symbol,
         "volume": float(lot),
-        "type": order_type,
+        "type": type_mt5,
         "price": float(price),
         "sl": float(round(sl, 2)),
         "tp": float(round(tp, 2)),
@@ -205,7 +217,10 @@ def close_all_positions(symbol):
             "type_filling": mt5.ORDER_FILLING_FOK,
         }
         mt5.order_send(request)
-
+# --- GLOBAL THRESHOLDS ---
+TREND_GAP_MIN = 15.0       # $15 difference between EMA9 and EMA200
+REDUCED_LOT_FACTOR = 0.5   # Risk 50% less on breakouts
+QUICK_TP_MULT = 1.5        # Exit faster on breakouts
 # --- MAIN LOOP ---
 while True:
     try:
@@ -214,14 +229,20 @@ while True:
             if df.empty: continue
             
             df = calculate_indicators(df)
-            last = df.iloc[-1]
+            last = df.iloc[-1]   # Current Candle
+            prev = df.iloc[-2]   # Previous Candle
             atr_v = last['atr']
+            ema_gap = abs(last['ema200'] - last['ema9'])
+
+            # Check if we are already in a trade
+            current_pos = mt5.positions_get(symbol=sym, magic=MAGIC_NUMBER)
 
             # 1. PnL Monitor
             pnl = get_total_floating_pnl(sym)
             logger.info(
                 f"[{sym}] Price: {last['close']:.2f} | "
                 f"RSI: {last['rsi']:.1f} | "
+                f"ATR: {atr_v:.2f} | "
                 f"EMA9/200: {last['ema9']:.1f}/{last['ema200']:.1f} | "
                 f"PnL: ${pnl:.2f}"
             )
@@ -248,6 +269,21 @@ while True:
                 # SELL: Trend down, Overbought, at Resistance
                 elif last['ema9'] < last['ema200'] and last['rsi'] >= 65 and last['close'] >= last['bb_upper'] * 0.995:
                     place_trade(sym, "SELL", lot_size, last['close'], atr_v)
+                # --- SCENARIO B: INTENSE TREND BREAKOUT (THE NEW ADDITION) ---
+                # Only triggers if Scenario A hasn't happened yet
+        
+                # BEARISH BREAKOUT: EMA Gap is huge + we broke the previous Low
+                elif last['ema9'] < last['ema200'] and ema_gap > TREND_GAP_MIN:
+                    if last['close'] < prev['low']:
+                        small_lot = min(dynamic_lot(sym, atr_v) * REDUCED_LOT_FACTOR, 1.0)
+                        logger.info(f"⚡ INTENSE BEARISH: Gap {ema_gap:.2f} | Breaking Low {prev['low']}")
+                        place_trade(sym, "SELL", small_lot, last['close'], atr_v, tp_multiplier=QUICK_TP_MULT)
+                # BULLISH BREAKOUT: EMA Gap is huge + we broke the previous High
+                elif last['ema9'] > last['ema200'] and ema_gap > TREND_GAP_MIN:
+                    if last['close'] > prev['high']:
+                        small_lot = min(dynamic_lot(sym, atr_v) * REDUCED_LOT_FACTOR, 1.0)
+                        logger.info(f"⚡ INTENSE BULLISH: Gap {ema_gap:.2f} | Breaking High {prev['high']}")
+                        place_trade(sym, "BUY", small_lot, last['close'], atr_v, tp_multiplier=QUICK_TP_MULT)
 
     except Exception as e:
         logger.error(f"Loop Error: {e}")
