@@ -217,12 +217,22 @@ def close_all_positions(symbol):
             "type_filling": mt5.ORDER_FILLING_FOK,
         }
         mt5.order_send(request)
+    def is_market_open(symbol):
+        info = mt5.symbol_info(symbol)
+        if info is None:
+            return False
+        # Check if the symbol is currently allowing trades
+        return info.trade_mode == mt5.SYMBOL_TRADE_MODE_FULL
 # --- GLOBAL THRESHOLDS ---
 TREND_GAP_MIN = 15.0       # $15 difference between EMA9 and EMA200
 REDUCED_LOT_FACTOR = 0.5   # Risk 50% less on breakouts
 QUICK_TP_MULT = 1.5        # Exit faster on breakouts
 # --- MAIN LOOP ---
 while True:
+    if not is_market_open("XAUUSD_"):
+        logger.warning("Market is CLOSED. Sleeping for 5 minutes...")
+        time.sleep(300) 
+        continue
     try:
         for sym in SYMBOLS:
             df = fetch_data(sym)
