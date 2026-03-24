@@ -221,17 +221,9 @@ def close_all_positions(symbol):
         info = mt5.symbol_info(symbol)
         if info is None:
             return False
-        # Check if the symbol is currently allowing trades
+        # SYMBOL_TRADE_MODE_FULL (value 4) means the market is open for trading
+        # Some brokers use SYMBOL_TRADE_MODE_LONGONLY or SHORTONLY during sessions
         return info.trade_mode == mt5.SYMBOL_TRADE_MODE_FULL
-    def is_market_open(symbol):
-    """
-    Checks if the symbol is currently open for trading on the MT5 server.
-    """
-    info = mt5.symbol_info(symbol)
-    if info is None:
-        return False
-    # SYMBOL_TRADE_MODE_FULL means the market is open for buying and selling
-    return info.trade_mode == mt5.SYMBOL_TRADE_MODE_FULL
 # --- GLOBAL THRESHOLDS ---
 TREND_GAP_MIN = 15.0       # $15 difference between EMA9 and EMA200
 REDUCED_LOT_FACTOR = 0.5   # Risk 50% less on breakouts
