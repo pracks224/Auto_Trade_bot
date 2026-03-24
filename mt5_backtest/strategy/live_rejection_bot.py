@@ -311,6 +311,7 @@ def execute_scalp(symbol, side, lot, price, sl, tp):
     result = mt5.order_send(request)
     if result.retcode == mt5.TRADE_RETCODE_DONE:
         logger.info(f" SCALP SUCCESS: {side} {lot} @ {price} | TP: {tp}")
+        send_telegram(f" SCALP {side} {lot} {symbol} at {price}\nSL: {sl}\nTP: {tp}")
         return True
     else:
         logger.error(f" SCALP FAILED: {result.comment}")
