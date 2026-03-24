@@ -1,6 +1,8 @@
 import sys
 import os
 import time
+import pytz # You may need to: pip install pytz
+from datetime import datetime
 import pandas as pd
 import numpy as np
 import MetaTrader5 as mt5
@@ -267,7 +269,7 @@ def check_big_candle_momentum(df, symbol, lot_size=1.0, tp_pips=2):
     atr_value = last['atr']
     logger.info(f" MOMENTUM DETECTION: Body ({candle_body:.2f}) > ATR ({atr_value:.2f})")
     # 2. Logic: Is the body bigger than the current volatility (ATR)?
-    if candle_body > atr_value:
+    if atr_value>2.50 and candle_body > atr_value:
         # Determine Direction
         is_bullish = last['close'] > last['open']
         side = "BUY" if is_bullish else "SELL"
@@ -314,11 +316,6 @@ def execute_scalp(symbol, side, lot, price, sl, tp):
         logger.error(f" SCALP FAILED: {result.comment}")
         return False
 
-from datetime import datetime
-
-import pytz # You may need to: pip install pytz
-from datetime import datetime
-
 def is_trading_allowed():
     """
     Checks if current time is OUTSIDE the 11:30 PM - 3:00 AM window.
@@ -351,8 +348,8 @@ while True:
             if not is_trading_allowed():
                 # Optional: Close open positions if you don't want to hold overnight
                 # close_all_positions(symbol)           
-                logger.info("⏸️ Blackout Zone (11:30 PM - 3:00 AM). Bot is sleeping...")
-                time.sleep(60) # Check again in 1 minute
+                logger.info("Blackout Zone (11:30 PM - 3:00 AM). Bot is sleeping...")
+                time.sleep(1800) # Check again in 1 minute
                 continue
             df = fetch_data(sym)
             if df.empty: continue
