@@ -269,7 +269,7 @@ def check_big_candle_momentum(df, symbol, lot_size=1.0, tp_pips=2):
     atr_value = last['atr']
     logger.info(f" MOMENTUM DETECTION: Body ({candle_body:.2f}) > ATR ({atr_value:.2f})")
     # 2. Logic: Is the body bigger than the current volatility (ATR)?
-    if 2.50 < atr_value < 4.50 and and candle_body > atr_value:
+    if 2.50 < atr_value < 4.50  and candle_body > atr_value:
         # Determine Direction
         is_bullish = last['close'] > last['open']
         side = "BUY" if is_bullish else "SELL"
