@@ -166,15 +166,15 @@ def place_trade(symbol, side, lot, price, atr_value, tp_multiplier=2.5):
     """
     # Standard 1.5x ATR Stop Loss
     m15_high, m15_low = get_m15_structure("XAUUSD_", lookback=4)
-    sl_dist = m15_low-2.0
+    #sl_dist = m15_low-2.0
     tp_dist = atr_value * tp_multiplier
     
     if side == "BUY":
-        sl = price - sl_dist
+        sl = m15_low - 2.0
         tp = price + tp_dist
         type_mt5 = mt5.ORDER_TYPE_BUY
     else:
-        sl = price + sl_dist
+        sl = m15_low + 2.0
         tp = price - tp_dist
         type_mt5 = mt5.ORDER_TYPE_SELL
 
@@ -273,7 +273,7 @@ while True:
 
             # 2. Trade Management
             set_break_even(sym, atr_v)
-            update_trailing_stop(sym, atr_v)
+            //update_trailing_stop(sym, atr_v)
 
             # 3. New Entry Logic
             open_pos = mt5.positions_get(symbol=sym, magic=MAGIC_NUMBER)
