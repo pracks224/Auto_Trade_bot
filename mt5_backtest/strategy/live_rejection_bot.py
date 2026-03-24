@@ -163,7 +163,8 @@ def place_trade(symbol, side, lot, price, atr_value, tp_multiplier=2.5):
     Executes a trade with a dynamic SL and a customizable TP multiplier.
     """
     # Standard 1.5x ATR Stop Loss
-    sl_dist = atr_value * 1.75
+    m15_high, m15_low = get_m15_structure("XAUUSD_", lookback=4)
+    sl_dist = m15_low-2.0
     tp_dist = atr_value * tp_multiplier
     
     if side == "BUY":
@@ -196,6 +197,17 @@ def place_trade(symbol, side, lot, price, atr_value, tp_multiplier=2.5):
     logger.info(f"{symbol} {side} {lot} lot executed at {price}")
     send_telegram(f"{side} {lot} {symbol} at {price}")
     return True
+def get_m15_structure(symbol, lookback=5):
+    # Fetch last 5 candles from M15
+    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M15, 0, lookback)
+    if rates is None:
+        return None, None
+    
+    # Get highest high and lowest low of the M15 range
+    highs = [x['high'] for x in rates]
+    lows = [x['low'] for x in rates]
+    
+    return max(highs), min(lows)
 
 def close_all_positions(symbol):
     positions = mt5.positions_get(symbol=symbol, magic=MAGIC_NUMBER)
