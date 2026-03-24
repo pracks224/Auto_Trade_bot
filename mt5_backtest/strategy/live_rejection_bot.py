@@ -158,12 +158,12 @@ def update_trailing_stop(symbol, atr_value, trail_multiplier=1.5):
                 # This will tell you if you are too close to the price (Code 10016)
                 logger.warning(f" TRAIL REJECTED: {result.comment} (Code: {result.retcode})")
 
-def place_trade(symbol, side, lot, price, atr_value, tp_multiplier=4.0):
+def place_trade(symbol, side, lot, price, atr_value, tp_multiplier=2.5):
     """
     Executes a trade with a dynamic SL and a customizable TP multiplier.
     """
     # Standard 1.5x ATR Stop Loss
-    sl_dist = atr_value * 1.5
+    sl_dist = atr_value * 1.75
     tp_dist = atr_value * tp_multiplier
     
     if side == "BUY":
@@ -220,7 +220,7 @@ def close_all_positions(symbol):
 # --- GLOBAL THRESHOLDS ---
 TREND_GAP_MIN = 15.0       # $15 difference between EMA9 and EMA200
 REDUCED_LOT_FACTOR = 0.5   # Risk 50% less on breakouts
-QUICK_TP_MULT = 1.5        # Exit faster on breakouts
+QUICK_TP_MULT = 1          # Exit faster on breakouts
 # --- MAIN LOOP ---
 while True:
     try:
