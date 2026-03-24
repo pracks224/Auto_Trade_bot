@@ -275,13 +275,13 @@ while True:
                 # BEARISH BREAKOUT: EMA Gap is huge + we broke the previous Low
                 elif last['ema9'] < last['ema200'] and ema_gap > TREND_GAP_MIN:
                     if last['close'] < prev['low']:
-                        small_lot = min(dynamic_lot(sym, atr_v) * REDUCED_LOT_FACTOR, 1.0)
+                        small_lot = 0.1
                         logger.info(f"INTENSE BEARISH: Gap {ema_gap:.2f} | Breaking Low {prev['low']}")
                         place_trade(sym, "SELL", small_lot, last['close'], atr_v, tp_multiplier=QUICK_TP_MULT)
                 # BULLISH BREAKOUT: EMA Gap is huge + we broke the previous High
                 elif last['ema9'] > last['ema200'] and ema_gap > TREND_GAP_MIN:
                     if last['close'] > prev['high']:
-                        small_lot = min(dynamic_lot(sym, atr_v) * REDUCED_LOT_FACTOR, 1.0)
+                        small_lot = 0.1
                         logger.info(f" INTENSE BULLISH: Gap {ema_gap:.2f} | Breaking High {prev['high']}")
                         place_trade(sym, "BUY", small_lot, last['close'], atr_v, tp_multiplier=QUICK_TP_MULT)
 
