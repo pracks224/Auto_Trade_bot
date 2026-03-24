@@ -18,6 +18,7 @@ except ImportError:
     # Fallback for demonstration if utils are missing
     print("Warning: Utils not found. Ensure utils folder is present.")
 
+
 logger = get_logger()
 SYMBOLS = ["XAUUSD_"]  # Ensure this matches your broker's suffix
 TIMEFRAME = mt5.TIMEFRAME_M1
@@ -253,6 +254,68 @@ def close_all_positions(symbol):
             "type_filling": mt5.ORDER_FILLING_FOK,
         }
         mt5.order_send(request)
+
+def check_big_candle_momentum(df, symbol, lot_size=1.0, tp_pips=2):
+    """
+    Detects if the last candle is significantly larger than average (ATR)
+    and executes a quick momentum scalp.
+    """
+    last = df.iloc[-1]
+    
+    # 1. Calculate the 'Body' of the candle (Open to Close)
+    candle_body = abs(last['close'] - last['open'])
+    atr_value = last['atr']
+    
+    # 2. Logic: Is the body bigger than the current volatility (ATR)?
+    if candle_body > atr_value:
+        # Determine Direction
+        is_bullish = last['close'] > last['open']
+        side = "BUY" if is_bullish else "SELL"
+        
+        # 3. Calculate Stop Loss (Previous Candle's Extreme)
+        # We add a tiny 0.10 buffer to avoid 'exact' price hits
+        sl = (last['low'] - 0.10) if is_bullish else (last['high'] + 0.10)
+        
+        # 4. Calculate Take Profit (2 Pips = 0.20 points in Gold)
+        pip_value = 0.10 # 1 pip in XAUUSD is usually 0.10
+        tp_dist = tp_pips * pip_value
+        tp = (last['close'] + tp_dist) if is_bullish else (last['close'] - tp_dist)
+        
+        logger.info(f" MOMENTUM DETECTED: Body ({candle_body:.2f}) > ATR ({atr_value:.2f})")
+        
+        # 5. Execute
+        return execute_scalp(symbol, side, lot_size, last['close'], sl, tp)
+    
+    return False
+
+def execute_scalp(symbol, side, lot, price, sl, tp):
+    """Internal execution for the scalper logic"""
+    order_type = mt5.ORDER_TYPE_BUY if side == "BUY" else mt5.ORDER_TYPE_SELL
+    
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": float(lot),
+        "type": order_type,
+        "price": float(price),
+        "sl": float(round(sl, 2)),
+        "tp": float(round(tp, 2)),
+        "magic": 999111, # Unique ID for scalp trades
+        "comment": "BigCandle_Scalp",
+        "type_filling": mt5.ORDER_FILLING_FOK,
+        "deviation": 3 # Tight deviation for fast moves
+    }
+    
+    result = mt5.order_send(request)
+    if result.retcode == mt5.TRADE_RETCODE_DONE:
+        logger.info(f" SCALP SUCCESS: {side} {lot} @ {price} | TP: {tp}")
+        return True
+    else:
+        logger.error(f" SCALP FAILED: {result.comment}")
+        return False
+
+
+
 # --- GLOBAL THRESHOLDS ---
 TREND_GAP_MIN = 15.0       # $15 difference between EMA9 and EMA200
 REDUCED_LOT_FACTOR = 0.5   # Risk 50% less on breakouts
@@ -297,6 +360,7 @@ while True:
             # 3. New Entry Logic
             open_pos = mt5.positions_get(symbol=sym, magic=MAGIC_NUMBER)
             if not open_pos:
+                check_big_candle_momentum(df, symbol, lot_size=1.0, tp_pips=10)
                 lot_size = dynamic_lot(sym, atr_v)
                 
                 # BUY: Trend up, Oversold, at Support
