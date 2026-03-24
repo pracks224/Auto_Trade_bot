@@ -21,7 +21,7 @@ except ImportError:
 logger = get_logger()
 SYMBOLS = ["XAUUSD_"]  # Ensure this matches your broker's suffix
 TIMEFRAME = mt5.TIMEFRAME_M1
-MAX_LOSS = 350
+MAX_LOSS = 500
 CHECK_INTERVAL = 60  
 MAGIC_NUMBER = 123456
 last_max_loss_time = 0
@@ -72,7 +72,7 @@ def dynamic_lot(symbol, atr_value):
     """Calculates lot size based on ATR but never exceeds 1.00 lot."""
     base_lot = 0.5
     # A risk divider of 2.0 or 3.0 will make the bot more conservative
-    risk_divider = 2.5 
+    risk_divider = 3 
     
     # Calculate the raw lot based on volatility
     raw_lot = (base_lot * 20 / max(atr_value, 1.0)) / risk_divider
@@ -270,9 +270,6 @@ while True:
             atr_v = last['atr']
             ema_gap = abs(last['ema200'] - last['ema9'])
 
-            # Check if we are already in a trade
-            current_pos = mt5.positions_get(symbol=sym, magic=MAGIC_NUMBER)
-
             # 1. PnL Monitor
             pnl = get_total_floating_pnl(sym)
             logger.info(
@@ -303,17 +300,17 @@ while True:
                 lot_size = dynamic_lot(sym, atr_v)
                 
                 # BUY: Trend up, Oversold, at Support
-                if last['ema9'] > last['ema200'] and last['rsi'] <= 35 and last['close'] <= last['bb_lower'] * 1.005:
+                if last['ema9'] > last['ema200'] and last['close'] > last['ema9'] and last['rsi'] <= 35 and last['close'] <= last['bb_lower'] * 1.005:
                     place_trade(sym, "BUY", lot_size, last['close'], atr_v)
                 
                 # SELL: Trend down, Overbought, at Resistance
-                elif last['ema9'] < last['ema200'] and last['rsi'] >= 65 and last['close'] >= last['bb_upper'] * 0.995:
+                elif last['ema9'] < last['ema200'] and last['close'] < last['ema9'] and last['rsi'] >= 65 and last['close'] >= last['bb_upper'] * 0.995:
                     place_trade(sym, "SELL", lot_size, last['close'], atr_v)
                 # --- SCENARIO B: INTENSE TREND BREAKOUT (THE NEW ADDITION) ---
                 # Only triggers if Scenario A hasn't happened yet
         
                 # BEARISH BREAKOUT: EMA Gap is huge + we broke the previous Low
-                elif last['ema9'] < last['ema200'] and ema_gap > TREND_GAP_MIN:
+                elif last['ema9'] < last['ema200'] and last['close'] < last['ema9'] and ema_gap > TREND_GAP_MIN:
                     if last['close'] < prev['low']:
                         small_lot = 0.25
                         logger.info(f"INTENSE BEARISH: Gap {ema_gap:.2f} | Breaking Low {prev['low']}")
