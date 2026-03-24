@@ -160,45 +160,7 @@ def update_trailing_stop(symbol, atr_value, trail_multiplier=1.5):
                 # This will tell you if you are too close to the price (Code 10016)
                 logger.warning(f" TRAIL REJECTED: {result.comment} (Code: {result.retcode})")
 
-def place_trade(symbol, side, lot, price, atr_value, tp_multiplier=2.5):
-    """
-    Executes a trade with a dynamic SL and a customizable TP multiplier.
-    """
-    # Standard 1.5x ATR Stop Loss
-    m15_high, m15_low = get_m15_structure("XAUUSD_", lookback=4)
-    #sl_dist = m15_low-2.0
-    tp_dist = atr_value * tp_multiplier
-    
-    if side == "BUY":
-        sl = m15_low - 2.0
-        tp = price + tp_dist
-        type_mt5 = mt5.ORDER_TYPE_BUY
-    else:
-        sl = m15_low + 2.0
-        tp = price - tp_dist
-        type_mt5 = mt5.ORDER_TYPE_SELL
 
-    request = {
-        "action": mt5.TRADE_ACTION_DEAL,
-        "symbol": symbol,
-        "volume": float(lot),
-        "type": type_mt5,
-        "price": float(price),
-        "sl": float(round(sl, 2)),
-        "tp": float(round(tp, 2)),
-        "deviation": 10,
-        "magic": MAGIC_NUMBER,
-        "comment": "PRO Hybrid Bot",
-        "type_filling": mt5.ORDER_FILLING_FOK
-    }
-
-    result = mt5.order_send(request)
-    if result.retcode != mt5.TRADE_RETCODE_DONE:
-        logger.error(f"Trade failed: {result.comment}")
-        return False
-    logger.info(f"{symbol} {side} {lot} lot executed at {price}")
-    send_telegram(f"{side} {lot} {symbol} at {price}")
-    return True
 def get_m15_structure(symbol, lookback=5):
     # Fetch last 5 candles from M15
     rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M15, 0, lookback)
@@ -210,6 +172,66 @@ def get_m15_structure(symbol, lookback=5):
     lows = [x['low'] for x in rates]
     
     return max(highs), min(lows)
+
+def place_trade(symbol, side, lot, price, atr_value, tp_multiplier=2.5):
+    """
+    Executes a trade using M15 structural levels for SL and ATR for TP.
+    """
+    # 1. Fetch the actual M15 High and Low coordinates
+    m15_high, m15_low = get_m15_structure(symbol, lookback=4)
+    
+    # Fallback safety: if M15 data fails, use a wide ATR stop
+    if m15_high is None or m15_low is None:
+        logger.warning("M15 structure not found. Falling back to ATR stops.")
+        m15_high = price + (atr_value * 3)
+        m15_low = price - (atr_value * 3)
+
+    # 2. Define SL and TP based on Direction
+    if side == "BUY":
+        # SL goes BELOW the structural low
+        sl = m15_low - 1.5 
+        # Safety: SL must be below entry price
+        if sl >= price:
+            sl = price - (atr_value * 2)
+            
+        tp = price + (atr_value * tp_multiplier)
+        type_mt5 = mt5.ORDER_TYPE_BUY
+    else:
+        # SELL: SL goes ABOVE the structural high (This fixes the Invalid Stop error)
+        sl = m15_high + 1.5 
+        # Safety: SL must be above entry price
+        if sl <= price:
+            sl = price + (atr_value * 2)
+            
+        tp = price - (atr_value * tp_multiplier)
+        type_mt5 = mt5.ORDER_TYPE_SELL
+
+    # 3. Build the Request
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": symbol,
+        "volume": float(lot),
+        "type": type_mt5,
+        "price": float(price),
+        "sl": float(round(sl, 2)), # Rounds to 2 decimals for Gold
+        "tp": float(round(tp, 2)),
+        "deviation": 10,
+        "magic": MAGIC_NUMBER,
+        "comment": "PRO Hybrid Bot",
+        "type_filling": mt5.ORDER_FILLING_FOK
+    }
+
+    # 4. Send Order
+    result = mt5.order_send(request)
+    
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        # Detailed error logging helps debug "Invalid Stops"
+        logger.error(f" Trade failed: {result.comment} (SL: {sl}, TP: {tp}, Price: {price})")
+        return False
+        
+    logger.info(f" {symbol} {side} {lot} executed at {price} | SL: {sl} | TP: {tp}")
+    send_telegram(f" {side} {lot} {symbol} at {price}\nSL: {sl}\nTP: {tp}")
+    return True
 
 def close_all_positions(symbol):
     positions = mt5.positions_get(symbol=symbol, magic=MAGIC_NUMBER)
