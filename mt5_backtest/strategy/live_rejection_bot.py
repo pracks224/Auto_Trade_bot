@@ -265,7 +265,7 @@ def check_big_candle_momentum(df, symbol, lot_size=1.0, tp_pips=2):
     # 1. Calculate the 'Body' of the candle (Open to Close)
     candle_body = abs(last['close'] - last['open'])
     atr_value = last['atr']
-    
+    logger.info(f" MOMENTUM DETECTION: Body ({candle_body:.2f}) > ATR ({atr_value:.2f})")
     # 2. Logic: Is the body bigger than the current volatility (ATR)?
     if candle_body > atr_value:
         # Determine Direction
@@ -314,6 +314,29 @@ def execute_scalp(symbol, side, lot, price, sl, tp):
         logger.error(f" SCALP FAILED: {result.comment}")
         return False
 
+from datetime import datetime
+
+import pytz # You may need to: pip install pytz
+from datetime import datetime
+
+def is_trading_allowed():
+    """
+    Checks if current time is OUTSIDE the 11:30 PM - 3:00 AM window.
+    Explicitly uses Asia/Kuwait (UTC+3) time.
+    """
+    # 1. Force the timezone to Kuwait
+    kwt_tz = pytz.timezone('Asia/Kuwait')
+    now_kwt = datetime.now(kwt_tz).time()
+    
+    # 2. Define the No-Trade Zone
+    start_no_trade = datetime.strptime("23:30", "%H:%M").time()
+    end_no_trade = datetime.strptime("03:00", "%H:%M").time()
+    
+    # 3. Logic Check
+    if now_kwt >= start_no_trade or now_kwt <= end_no_trade:
+        return False # We are in the blackout zone
+        
+    return True # Trading is allowed
 
 
 # --- GLOBAL THRESHOLDS ---
@@ -324,6 +347,13 @@ QUICK_TP_MULT = 1          # Exit faster on breakouts
 while True:
     try:
         for sym in SYMBOLS:
+            # 1. CHECK TIME FIRST
+            if not is_trading_allowed():
+                # Optional: Close open positions if you don't want to hold overnight
+                # close_all_positions(symbol)           
+                logger.info("⏸️ Blackout Zone (11:30 PM - 3:00 AM). Bot is sleeping...")
+                time.sleep(60) # Check again in 1 minute
+                continue
             df = fetch_data(sym)
             if df.empty: continue
             
@@ -360,7 +390,7 @@ while True:
             # 3. New Entry Logic
             open_pos = mt5.positions_get(symbol=sym, magic=MAGIC_NUMBER)
             if not open_pos:
-                check_big_candle_momentum(df, symbol, lot_size=1.0, tp_pips=10)
+                check_big_candle_momentum(df, sym, lot_size=1.0, tp_pips=10)
                 lot_size = dynamic_lot(sym, atr_v)
                 
                 # BUY: Trend up, Oversold, at Support
