@@ -24,6 +24,8 @@ TIMEFRAME = mt5.TIMEFRAME_M1
 MAX_LOSS = 350
 CHECK_INTERVAL = 60  
 MAGIC_NUMBER = 123456
+last_max_loss_time = 0
+COOLDOWN_PERIOD = 900
 
 # Connect MT5
 if not mt5.initialize():
@@ -262,7 +264,11 @@ while True:
             if pnl <= -MAX_LOSS:
                 logger.error(f"!!! MAX LOSS HIT (${pnl:.2f}) !!! Closing all.")
                 close_all_positions(sym)
-                time.sleep(300)
+                last_max_loss_time = time.time()
+                continue
+            # At the start of your Entry Logic:
+            if time.time() - last_max_loss_time < COOLDOWN_PERIOD:
+                # Optional: logger.info("In Max Loss Cooldown... waiting.")
                 continue
 
             # 2. Trade Management
