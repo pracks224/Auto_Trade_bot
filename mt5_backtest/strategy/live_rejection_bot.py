@@ -68,15 +68,20 @@ def calculate_regime(df, window=15):
     ss_res = np.sum(residuals**2)
     ss_tot = np.sum((y - np.mean(y))**2)
     r_squared = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0
+    # Identify Regime for the logger
+    regime = "TRENDING" if r_squared > 0.65 else "RANGE" if r_squared < 0.35 else "TRANSITION"
     
+    # The Log Line
+    logger.info(f"[REGIME] R2: {r_squared:.3f} | Slope: {slope:.4f} | Mode: {regime}")
     return slope, r_squared
 def rsquar_startergy(df,symbol):
     slope, r_sq = calculate_regime(df)
     atr = df['atr'].iloc[-1]
     curr_price = df['close'].iloc[-1]
+    min_slope_threshold = 0.15
 
     # --- REGIME A: TRENDING (High R-squared) ---
-    if r_sq > 0.65:
+    if r_sq > 0.65 and abs(slope) > min_slope_threshold:
         # UPTREND PULLBACK
         if slope > 0 and curr_price <= df['ema9'].iloc[-1]:
             sl = curr_price - (2.0 * atr) # Trend needs 2x ATR room
