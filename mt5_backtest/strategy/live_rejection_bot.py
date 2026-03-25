@@ -257,37 +257,52 @@ def close_all_positions(symbol):
         }
         mt5.order_send(request)
 
-def check_big_candle_momentum(df, symbol, lot_size=1.0, tp_pips=2):
+def check_big_candle_momentum(df, symbol, lot_size=1.0, tp_pips=10):
     """
-    Detects if the last candle is significantly larger than average (ATR)
-    and executes a quick momentum scalp.
+    Refined Momentum: Only enters 'Big Candles' if RSI is NOT exhausted
+    and price is aligned with the EMA 200 trend.
     """
     last = df.iloc[-1]
     
-    # 1. Calculate the 'Body' of the candle (Open to Close)
+    # 1. Core Data Points
     candle_body = abs(last['close'] - last['open'])
     atr_value = last['atr']
-    logger.info(f" MOMENTUM DETECTION: Body ({candle_body:.2f}) > ATR ({atr_value:.2f})")
-    # 2. Logic: Is the body bigger than the current volatility (ATR)?
-    if 2.50 < atr_value < 4.50  and candle_body > atr_value:
-        # Determine Direction
-        is_bullish = last['close'] > last['open']
+    rsi_value = last['rsi']
+    ema_200 = last['ema200']
+    current_price = last['close']
+    
+    # 2. Basic Volatility Filter (Keep your existing ATR range)
+    if not (2.50 < atr_value < 4.50):
+        return False
+
+    # 3. Direction & Trend Logic
+    is_bullish = last['close'] > last['open']
+    
+    # NEW: Trend Alignment (Only Buy above EMA200, Sell below)
+    trend_ok = (is_bullish and current_price > ema_200) or (not is_bullish and current_price < ema_200)
+    
+    # NEW: Exhaustion Filter (The RSI "Cool-Off" Rule)
+    # Don't BUY if RSI > 70 (Overbought), Don't SELL if RSI < 30 (Oversold)
+    rsi_ok = (is_bullish and rsi_value < 70) or (not is_bullish and rsi_value > 30)
+
+    # 4. Final Execution Logic
+    if candle_body > atr_value and trend_ok and rsi_ok:
         side = "BUY" if is_bullish else "SELL"
         
-        # 3. Calculate Stop Loss (Previous Candle's Extreme)
-        # We add a tiny 0.10 buffer to avoid 'exact' price hits
+        # Calculate SL (Using your buffer logic)
         sl = (last['low'] - 0.10) if is_bullish else (last['high'] + 0.10)
         
-        # 4. Calculate Take Profit (2 Pips = 0.20 points in Gold)
-        pip_value = 0.10 # 1 pip in XAUUSD is usually 0.10
-        tp_dist = tp_pips * pip_value
-        tp = (last['close'] + tp_dist) if is_bullish else (last['close'] - tp_dist)
+        # Calculate TP (I increased tp_pips slightly to 10 pips / 1.0 point for Gold)
+        tp_dist = tp_pips * 0.10 
+        tp = (current_price + tp_dist) if is_bullish else (current_price - tp_dist)
         
-        logger.info(f" MOMENTUM DETECTED: Body ({candle_body:.2f}) > ATR ({atr_value:.2f})")
-        
-        # 5. Execute
-        return execute_scalp(symbol, side, lot_size, last['close'], sl, tp)
+        logger.info(f" MOMENTUM EXECUTED: {side} @ {current_price} | RSI: {rsi_value:.1f} | Body: {candle_body:.2f}")
+        return execute_scalp(symbol, side, lot_size, current_price, sl, tp)
     
+    # Log why we skipped (for debugging)
+    if candle_body > atr_value:
+        logger.warning(f" MOMENTUM SKIPPED: RSI ({rsi_value:.1f}) or Trend Alignment issues.")
+        
     return False
 
 def execute_scalp(symbol, side, lot, price, sl, tp):
@@ -388,8 +403,9 @@ while True:
             # 3. New Entry Logic
             open_pos = mt5.positions_get(symbol=sym, magic=MAGIC_NUMBER)
             if not open_pos:
-                check_big_candle_momentum(df, sym, lot_size=1.0, tp_pips=10)
                 lot_size = dynamic_lot(sym, atr_v)
+                ema9_dist = abs(last['close'] - last['ema9'])
+                is_overextended = ema9_dist > (atr_v * 1.2) # Tightened for Gold
                 
                 # BUY: Trend up, Oversold, at Support
                 if last['ema9'] > last['ema200'] and last['close'] > last['ema9'] and last['rsi'] <= 35 and last['close'] <= last['bb_lower'] * 1.005:
@@ -400,19 +416,26 @@ while True:
                     place_trade(sym, "SELL", lot_size, last['close'], atr_v)
                 # --- SCENARIO B: INTENSE TREND BREAKOUT (THE NEW ADDITION) ---
                 # Only triggers if Scenario A hasn't happened yet
-        
-                # BEARISH BREAKOUT: EMA Gap is huge + we broke the previous Low
-                elif last['ema9'] < last['ema200'] and last['close'] < last['ema9'] and last['rsi'] > 30 and ema_gap > TREND_GAP_MIN:
-                    if last['close'] < prev['low']:
-                        small_lot = 0.25
-                        logger.info(f"INTENSE BEARISH: Gap {ema_gap:.2f} | Breaking Low {prev['low']}")
-                        place_trade(sym, "SELL", small_lot, last['close'], atr_v, tp_multiplier=QUICK_TP_MULT)
-                # BULLISH BREAKOUT: EMA Gap is huge + we broke the previous High
-                elif last['ema9'] > last['ema200'] and last['close'] > last['ema9'] and  last['rsi'] < 70 and ema_gap > TREND_GAP_MIN:
-                    if last['close'] > prev['high']:
-                        small_lot = 0.25
-                        logger.info(f" INTENSE BULLISH: Gap {ema_gap:.2f} | Breaking High {prev['high']}")
-                        place_trade(sym, "BUY", small_lot, last['close'], atr_v, tp_multiplier=QUICK_TP_MULT)
+                
+                elif not is_overextended:
+                    # BEARISH BREAKOUT: EMA Gap is huge + we broke the previous Low
+                    if last['ema9'] < last['ema200'] and last['close'] < last['ema9'] and last['rsi'] > 30 and ema_gap > TREND_GAP_MIN:
+                        if last['close'] < prev['low']:
+                            small_lot = 0.25
+                            logger.info(f"INTENSE BEARISH: Gap {ema_gap:.2f} | Breaking Low {prev['low']}")
+                            place_trade(sym, "SELL", small_lot, last['close'], atr_v, tp_multiplier=QUICK_TP_MULT)
+                    
+                    # BULLISH BREAKOUT: EMA Gap is huge + we broke the previous High
+                    elif last['ema9'] > last['ema200'] and last['close'] > last['ema9'] and  last['rsi'] < 70 and ema_gap > TREND_GAP_MIN:
+                        if last['close'] > prev['high']:
+                            small_lot = 0.25
+                            logger.info(f" INTENSE BULLISH: Gap {ema_gap:.2f} | Breaking High {prev['high']}")
+                            place_trade(sym, "BUY", small_lot, last['close'], atr_v, tp_multiplier=QUICK_TP_MULT)
+                    # Only check Big Candle if Breakout didn't trigger
+                    else:
+                        check_big_candle_momentum(df, sym, lot_size=1.0, tp_pips=10)
+                else:
+                    logger.warning(f"OVEREXTENDED: Price is {ema9_dist:.2f} away from EMA9. Standing down.")
 
     except Exception as e:
         logger.error(f"Loop Error: {e}")
