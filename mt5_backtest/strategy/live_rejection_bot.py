@@ -54,6 +54,55 @@ def calculate_indicators(df):
     df['ema200'] = df['close'].ewm(span=200).mean()
     return df
 
+def calculate_regime(df, window=15):
+    # Get the last 'n' close prices
+    y = df['close'].tail(window).values
+    x = np.arange(window)
+    
+    # Perform Linear Regression
+    slope, intercept = np.polyfit(x, y, 1)
+    
+    # Calculate R-squared (How well the line fits the data)
+    y_pred = slope * x + intercept
+    residuals = y - y_pred
+    ss_res = np.sum(residuals**2)
+    ss_tot = np.sum((y - np.mean(y))**2)
+    r_squared = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0
+    
+    return slope, r_squared
+def rsquar_startergy(df,symbol):
+    slope, r_sq = calculate_regime(df)
+    atr = df['atr'].iloc[-1]
+    curr_price = df['close'].iloc[-1]
+
+    # --- REGIME A: TRENDING (High R-squared) ---
+    if r_sq > 0.65:
+        # UPTREND PULLBACK
+        if slope > 0 and curr_price <= df['ema9'].iloc[-1]:
+            sl = curr_price - (2.0 * atr) # Trend needs 2x ATR room
+            tp = curr_price + (1.5 * atr)
+            return execute_scalp(symbol, "BUY", 0.5, curr_price, sl, tp)
+            
+        # DOWNTREND PULLBACK
+        elif slope < 0 and curr_price >= df['ema9'].iloc[-1]:
+            sl = curr_price + (2.0 * atr)
+            tp = curr_price - (1.5 * atr)
+            return execute_scalp(symbol, "SELL", 0.5, curr_price, sl, tp)
+
+    # --- REGIME B: RANGE BOUND (Low R-squared) ---
+    elif r_sq < 0.35:
+        # SELL THE TOP (Rubber Band)
+        if df['rsi'].iloc[-1] > 70:
+            sl = curr_price + (1.2 * atr) # Range needs tight 1.2x ATR
+            tp = curr_price - (1.0 * atr) # Quick 1:1 exit
+            return execute_scalp(symbol, "SELL", 0.5, curr_price, sl, tp)
+            
+        # BUY THE BOTTOM (Rubber Band)
+        elif df['rsi'].iloc[-1] < 30:
+            sl = curr_price - (1.2 * atr)
+            tp = curr_price + (1.0 * atr)
+            return execute_scalp(symbol, "BUY", 0.5, curr_price, sl, tp)
+
 def get_total_floating_pnl(symbol):
     """Reads live PnL directly from MT5 terminal with safety defaults."""
     positions = mt5.positions_get(symbol=symbol, magic=MAGIC_NUMBER)
@@ -429,7 +478,8 @@ while True:
             # 3. New Entry Logic
             open_pos = mt5.positions_get(symbol=sym, magic=MAGIC_NUMBER)
             if not open_pos:
-                rubber_band_strategy(df, sym)
+                rsquar_startergy(df, sym)
+                #rubber_band_strategy(df, sym)
                 '''
                 lot_size = dynamic_lot(sym, atr_v)
                 ema9_dist = abs(last['close'] - last['ema9'])
