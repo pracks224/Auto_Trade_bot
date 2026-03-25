@@ -257,6 +257,33 @@ def close_all_positions(symbol):
         }
         mt5.order_send(request)
 
+def rubber_band_strategy(df, symbol):
+    last = df.iloc[-1]
+    atr_v = last['atr']
+    
+    # 1. Trend Direction
+    is_uptrend = last['close'] > last['ema200']
+    is_downtrend = last['close'] < last['ema200']
+
+    # 2. Buy Trigger: Uptrend + Pullback + RSI Oversold
+    if is_uptrend and last['rsi'] < 32 and last['close'] < last['ema9']:
+        # Ensure we have a "Lower Wick" (Hammer-ish)
+        candle_bottom_wick = min(last['open'], last['close']) - last['low']
+        if candle_bottom_wick > (atr_v * 0.2):
+            tp = last['close'] + 1.2 # Tight $1.20 profit
+            sl = last['close'] - (atr_v * 1.5) # ATR based safety
+            return execute_scalp(symbol, "BUY", 0.5, last['close'], sl, tp)
+
+    # 3. Sell Trigger: Downtrend + Pop + RSI Overbought
+    elif is_downtrend and last['rsi'] > 68 and last['close'] > last['ema9']:
+        # Ensure we have an "Upper Wick" (Shooting Star-ish)
+        candle_top_wick = last['high'] - max(last['open'], last['close'])
+        if candle_top_wick > (atr_v * 0.2):
+            tp = last['close'] - 1.2
+            sl = last['close'] + (atr_v * 1.5)
+            return execute_scalp(symbol, "SELL", 0.5, last['close'], sl, tp)
+            
+    return False
 def check_big_candle_momentum(df, symbol, lot_size=1.0, tp_pips=10):
     """
     Refined Momentum: Only enters 'Big Candles' if RSI is NOT exhausted
@@ -351,7 +378,6 @@ def is_trading_allowed():
         
     return True # Trading is allowed
 
-
 # --- GLOBAL THRESHOLDS ---
 TREND_GAP_MIN = 15.0       # $15 difference between EMA9 and EMA200
 REDUCED_LOT_FACTOR = 0.5   # Risk 50% less on breakouts
@@ -398,11 +424,13 @@ while True:
 
             # 2. Trade Management
             set_break_even(sym, atr_v)
-            #update_trailing_stop(sym, atr_v)
+            update_trailing_stop(sym, atr_v)
 
             # 3. New Entry Logic
             open_pos = mt5.positions_get(symbol=sym, magic=MAGIC_NUMBER)
             if not open_pos:
+                rubber_band_strategy(df, sym)
+                '''
                 lot_size = dynamic_lot(sym, atr_v)
                 ema9_dist = abs(last['close'] - last['ema9'])
                 is_overextended = ema9_dist > (atr_v * 1.2) # Tightened for Gold
@@ -436,7 +464,7 @@ while True:
                         check_big_candle_momentum(df, sym, lot_size=1.0, tp_pips=10)
                 else:
                     logger.warning(f"OVEREXTENDED: Price is {ema9_dist:.2f} away from EMA9. Standing down.")
-
+                '''
     except Exception as e:
         logger.error(f"Loop Error: {e}")
     
