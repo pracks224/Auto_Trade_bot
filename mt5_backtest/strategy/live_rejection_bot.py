@@ -258,7 +258,6 @@ def hybrid_adx_bollinger_bkp(df,symbol):
     is_trending = df['adx'].iloc[-1] > 25
 
     # --- 2. EXECUTION LOGIC ---
-   logger.info(f" Price: {curr_price:.2f} | ADX: {curr_adx:.1f} | EXPAND: {is_expanded:.1f} | {reason}")
     # MODE A: TRENDING (Expansion + Widening Gap + Strong ADX)
     if is_expanded and is_trending and (ema_gap > prev_ema_gap):    
         # Uptrend Pullback
