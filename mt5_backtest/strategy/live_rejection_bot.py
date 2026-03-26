@@ -663,7 +663,7 @@ while True:
                 time.sleep(1800) # Check again in 1 minute
                 continue
             # 1. Request 500 candles (Solves the Warm-up/NaN issue)
-            rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 0, 500)
+            rates = mt5.copy_rates_from_pos(sym, mt5.TIMEFRAME_M1, 0, 500)
 
             if rates is None or len(rates) < 500:
                 logger.warning(f"MT5 Data Syncing... Got {len(rates) if rates else 0}/500 candles.")
