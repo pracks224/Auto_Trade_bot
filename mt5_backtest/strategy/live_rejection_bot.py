@@ -147,6 +147,7 @@ def hybrid_adx_bollinger(df, symbol):
 
     # --- 2. EXTRACT LATEST VALUES (SETUP DATA) ---
     curr_price = df['close'].iloc[-1]
+    prev_price = df['close'].iloc[-2] # Added for "Hook" check
    # curr_adx   = df['adx'].iloc[-1]
     curr_rsi   = df['rsi'].iloc[-1]
     curr_atr   = df['atr_smooth'].iloc[-1]  # This is a float now
@@ -155,13 +156,14 @@ def hybrid_adx_bollinger(df, symbol):
     ema200     = df['ema200'].iloc[-1]
     bb_up      = df['bb_upper'].iloc[-1]
     bb_low     = df['bb_lower'].iloc[-1]
+    bb_mid     = df['bb_mid'].iloc[-1]
     
     ema_gap      = abs(ema9 - ema200)
     prev_ema_gap = abs(df['ema9'].iloc[-2] - df['ema200'].iloc[-2])
 
     # Booleans for logic
     is_expanded  = df['bb_width'].iloc[-1] > (df['bb_width_avg'].iloc[-1] * 1.2)
-    is_trending  = curr_adx > 20
+    is_trending  = curr_adx > 25
     gap_widening = ema_gap > prev_ema_gap
     stretch = abs(curr_price - ema9)
     # Use 3x ATR as the "Extreme" marker for Gold
@@ -206,130 +208,22 @@ def hybrid_adx_bollinger(df, symbol):
             return execute_scalp(symbol, "SELL", 0.3, curr_price, sl, tp)
 
     elif mode == "RANGE":
-        # Buy Bottom
-        if curr_price <= bb_low and curr_rsi < 30:
-            sl = ema30
-            tp = curr_price + (1 * curr_atr)
-            return execute_scalp(symbol, "BUY", 0.5, curr_price, sl, tp)
-        # Sell Top
-        elif curr_price >= bb_up and curr_rsi > 70:
-            sl = ema30
-            tp = curr_price - (1 * curr_atr)
-            return execute_scalp(symbol, "SELL", 0.5, curr_price, sl, tp)
-        elif is_overstretched and curr_rsi < 28 or curr_price <= bb_low:
-            reason = "REVERSAL BUY: Extreme RSI or BB Touch"
-            logger.info(f"{reason}")
-            return execute_scalp(symbol, "BUY", 0.5, curr_price, curr_price - (curr_atr * 2), ema9)
-    
-        # SELL if RSI is extreme OR price is at BB Top
-        elif is_overstretched and curr_rsi > 72 or curr_price >= bb_up:
-            reason = "REVERSAL SELL: Extreme RSI or BB Touch"
-            logger.info(f"{reason}")
-            return execute_scalp(symbol, "SELL", 0.5, curr_price, curr_price + (curr_atr * 2), ema9)
-
-    return None
-def hybrid_adx_bollinger_bkp(df,symbol):
-
-    # --- 1. SETUP DATA ---
-    # Extract single float values from the end of the DataFrame
-    curr_price = df['close'].iloc[-1]
-    curr_adx   = df['adx'].iloc[-1]
-    curr_rsi   = df['rsi'].iloc[-1]
-    curr_atr   = df['tr'].rolling(window=14).mean().iloc[-1] # Fixes the 'function' error
-    ema9       = df['ema9'].iloc[-1]
-    ema30      = df['ema30'].iloc[-1]
-    ema200     = df['ema200'].iloc[-1]
-    bb_up      = df['bb_upper'].iloc[-1]
-    bb_low     = df['bb_lower'].iloc[-1]
-    bb_width   = df['bb_width'].iloc[-1]
-    avg_width  = df['bb_width_avg'].iloc[-1]
-
-    # Gap logic
-    ema_gap      = abs(ema9 - ema200)
-    prev_ema_gap = abs(df['ema9'].iloc[-2] - df['ema200'].iloc[-2])
-
-    # Thresholds (Booleans)
-    is_expanded = bb_width > (avg_width * 1.2)
-    is_trending = curr_adx > 25
-    gap_widening = ema_gap > prev_ema_gap
-
-    # --- 1. EMAs (For Trend & Stop Loss) ---
-    df['ema9'] = df['close'].ewm(span=9, adjust=False).mean()
-    df['ema30'] = df['close'].ewm(span=30, adjust=False).mean()
-    df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
-
-    # --- 2. Bollinger Bands (For Squeeze/Expansion) ---
-    df['bb_mid'] = df['close'].rolling(window=20).mean()
-    bb_std = df['close'].rolling(window=20).std()
-    df['bb_upper'] = df['bb_mid'] + (bb_std * 2)
-    df['bb_lower'] = df['bb_mid'] - (bb_std * 2)
-    df['bb_width'] = df['bb_upper'] - df['bb_lower']
-    df['bb_width_avg'] = df['bb_width'].rolling(window=20).mean()
-
-    # --- 3. RSI (For Range Mode) ---
-    delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / loss
-    df['rsi'] = 100 - (100 / (1 + rs))
-
-    # --- 4. ADX (Leading Trend Strength) ---
-    # Calculate True Range
-    df['tr'] = np.maximum(df['high'] - df['low'], 
-                np.maximum(abs(df['high'] - df['close'].shift(1)), 
-                abs(df['low'] - df['close'].shift(1))))
-    atr = df['tr'].rolling(window=14).mean()
-    
-    up_move = df['high'] - df['high'].shift(1)
-    dn_move = df['low'].shift(1) - df['low']
-    
-    pos_dm = np.where((up_move > dn_move) & (up_move > 0), up_move, 0)
-    neg_dm = np.where((dn_move > up_move) & (dn_move > 0), dn_move, 0)
-    
-    pos_di = 100 * (pd.Series(pos_dm).rolling(14).mean() / atr)
-    neg_di = 100 * (pd.Series(neg_dm).rolling(14).mean() / atr)
-    
-    dx = 100 * (abs(pos_di - neg_di) / (pos_di + neg_di))
-    df['adx'] = dx.rolling(window=14).mean()
-    # --- 1. SETUP DATA ---
-    ema_gap = abs(df['ema9'].iloc[-1] - df['ema200'].iloc[-1])
-    prev_ema_gap = abs(df['ema9'].iloc[-2] - df['ema200'].iloc[-2])
-
-    # Thresholds
-    is_expanded = df['bb_width'].iloc[-1] > (df['bb_width_avg'].iloc[-1] * 1.2)
-    is_trending = df['adx'].iloc[-1] > 25
-
-    # --- 2. EXECUTION LOGIC ---
-    # MODE A: TRENDING (Expansion + Widening Gap + Strong ADX)
-    if is_expanded and is_trending and (ema_gap > prev_ema_gap):    
-        # Uptrend Pullback
-        if df['ema9'].iloc[-1] > df['ema200'].iloc[-1]:
-            if curr_price <= df['ema9'].iloc[-1]: # Entry on pullback
-                sl = df['ema30'].iloc[-1]          # SL at EMA30
-                tp = curr_price + (current_atr * 2.5)
-                return execute_scalp(symbol, "BUY", 0.5, curr_price, sl, tp)
-
-        # Downtrend Pullback
-        elif df['ema9'].iloc[-1] < df['ema200'].iloc[-1]:
-            if curr_price >= df['ema9'].iloc[-1]: # Entry on pullback
-                sl = df['ema30'].iloc[-1]          # SL at EMA30
-                tp = curr_price - (current_atr * 2.5)
-                return execute_scalp(symbol, "SELL", 0.5, curr_price, sl, tp)
-
-    # MODE B: RANGE (Squeeze / Low Volatility / Weak ADX)
-    elif not is_expanded or not is_trending:
+        # BUY LOGIC
+        if curr_price <= bb_low or curr_rsi < 28 or (is_overstretched and curr_price < ema9):
+            # The "Hook": Wait for price to show a tiny bit of recovery or RSI to turn
+            if curr_price > prev_price or curr_rsi > df['rsi'].iloc[-2]:
+                reason = "REVERSAL BUY: RSI/BB Extreme + Hook"
+                logger.info(f"[SIGNAL] {reason} | Price: {curr_price:.2f}")
+                # TP is the Middle Band (Reversion to mean)
+                return execute_scalp(symbol, "BUY", 0.5, curr_price, curr_price - (curr_atr * 2), bb_mid)
         
-        # Buy the Bottom of the Range
-        if curr_price <= df['bb_lower'].iloc[-1] and rsi < 30:
-            sl = curr_price - (1.5 * atr)        # Tighter SL for ranges
-            tp = df['ema9'].iloc[-1]             # Target Mean Reversion
-            return execute_scalp(symbol, "BUY", 0.5, curr_price, sl, tp)
-
-        # Sell the Top of the Range
-        elif curr_price >= df['bb_upper'].iloc[-1] and rsi > 70:
-            sl = curr_price + (1.5 * atr)
-            tp = df['ema9'].iloc[-1]             # Target Mean Reversion
-            return execute_scalp(symbol, "SELL", 0.5, curr_price, sl, tp)
+        # SELL LOGIC
+        elif curr_price >= bb_up or curr_rsi > 72 or (is_overstretched and curr_price > ema9):
+            if curr_price < prev_price or curr_rsi < df['rsi'].iloc[-2]:
+                reason = "REVERSAL SELL: RSI/BB Extreme + Hook"
+                logger.info(f"[SIGNAL] {reason} | Price: {curr_price:.2f}")
+                return execute_scalp(symbol, "SELL", 0.5, curr_price, curr_price + (curr_atr * 2), bb_mid)       
+    return None
 
 def rsquar_startergy(df,symbol):
     slope, r_sq = calculate_regime(df)
@@ -736,8 +630,8 @@ while True:
                 continue
 
             # 2. Trade Management
-            set_break_even(sym, atr_v)
-            update_trailing_stop(sym, atr_v)
+            #set_break_even(sym, atr_v)
+            #update_trailing_stop(sym, atr_v)
 
             # 3. New Entry Logic
             open_pos = mt5.positions_get(symbol=sym, magic=MAGIC_NUMBER)
