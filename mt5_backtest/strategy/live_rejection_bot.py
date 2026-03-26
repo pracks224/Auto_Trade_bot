@@ -37,7 +37,7 @@ if not mt5.initialize():
 else:
     logger.info("PRO Hybrid Bot connected to MT5 successfully")
 
-def fetch_data(symbol, bars=200):
+def fetch_data(symbol, bars=500):
     rates = mt5.copy_rates_from_pos(symbol, TIMEFRAME, 0, bars)
     if rates is None: return pd.DataFrame()
     df = pd.DataFrame(rates)
@@ -664,11 +664,6 @@ while True:
                 continue
             # 1. Request 500 candles (Solves the Warm-up/NaN issue)
             rates = mt5.copy_rates_from_pos(sym, mt5.TIMEFRAME_M1, 0, 500)
-
-            if rates is None or len(rates) < 500:
-                logger.warning(f"MT5 Data Syncing... Got {len(rates) if rates else 0}/500 candles.")
-                time.sleep(1) # Wait for terminal to sync
-                continue
             df = fetch_data(sym)
             if df.empty: continue
             
