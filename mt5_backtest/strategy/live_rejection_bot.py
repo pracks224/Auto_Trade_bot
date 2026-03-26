@@ -74,6 +74,57 @@ def calculate_regime(df, window=15):
     # The Log Line
     logger.info(f"[REGIME] R2: {r_squared:.3f} | Slope: {slope:.4f} | Mode: {regime}")
     return slope, r_squared
+
+def hybrid_adx_bollinger(df,symbol):
+    # --- 1. CALCULATE INPUTS ---
+    # Gap and Momentum
+    ema_gap = abs(df['ema9'].iloc[-1] - df['ema200'].iloc[-1])
+    prev_ema_gap = abs(df['ema9'].iloc[-2] - df['ema200'].iloc[-2])
+    gap_widening = ema_gap > prev_ema_gap
+
+    # Volatility (Squeeze vs Expansion)
+    bb_width = df['bb_upper'].iloc[-1] - df['bb_lower'].iloc[-1]
+    avg_bb_width = df['bb_width'].rolling(window=20).mean().iloc[-1]
+    is_expanded = bb_width > (avg_bb_width * 1.2) # 20% wider than average
+
+    # Leading Indicators
+    adx = df['adx'].iloc[-1]  # Strength (>25 is trending)
+    rsi = df['rsi'].iloc[-1]  # Overbought/Oversold for Range
+
+    # --- 2. EXECUTION LOGIC ---
+
+    # MODE A: TRENDING (Expansion + Widening Gap + Strong ADX)
+    if is_expanded and adx > 25 and gap_widening:
+        
+        # Uptrend Pullback
+        if df['ema9'].iloc[-1] > df['ema200'].iloc[-1]:
+            if curr_price <= df['ema9'].iloc[-1]: # Entry on pullback
+                sl = df['ema30'].iloc[-1]          # SL at EMA30
+                tp = curr_price + (2.5 * atr)
+                return execute_scalp(symbol, "BUY", 0.5, curr_price, sl, tp)
+
+        # Downtrend Pullback
+        elif df['ema9'].iloc[-1] < df['ema200'].iloc[-1]:
+            if curr_price >= df['ema9'].iloc[-1]: # Entry on pullback
+                sl = df['ema30'].iloc[-1]          # SL at EMA30
+                tp = curr_price - (2.5 * atr)
+                return execute_scalp(symbol, "SELL", 0.5, curr_price, sl, tp)
+
+    # MODE B: RANGE (Squeeze / Low Volatility / Weak ADX)
+    elif bb_width <= avg_bb_width or adx <= 25:
+        
+        # Buy the Bottom of the Range
+        if curr_price <= df['bb_lower'].iloc[-1] and rsi < 30:
+            sl = curr_price - (1.5 * atr)        # Tighter SL for ranges
+            tp = df['ema9'].iloc[-1]             # Target Mean Reversion
+            return execute_scalp(symbol, "BUY", 0.5, curr_price, sl, tp)
+
+        # Sell the Top of the Range
+        elif curr_price >= df['bb_upper'].iloc[-1] and rsi > 70:
+            sl = curr_price + (1.5 * atr)
+            tp = df['ema9'].iloc[-1]             # Target Mean Reversion
+            return execute_scalp(symbol, "SELL", 0.5, curr_price, sl, tp)
+
 def rsquar_startergy(df,symbol):
     slope, r_sq = calculate_regime(df)
     atr = df['atr'].iloc[-1]
@@ -483,7 +534,8 @@ while True:
             # 3. New Entry Logic
             open_pos = mt5.positions_get(symbol=sym, magic=MAGIC_NUMBER)
             if not open_pos:
-                rsquar_startergy(df, sym)
+                hybrid_adx_bollinger(df, sym)
+                #rsquar_startergy(df, sym)
                 #rubber_band_strategy(df, sym)
                 '''
                 lot_size = dynamic_lot(sym, atr_v)
