@@ -161,7 +161,7 @@ def hybrid_adx_bollinger(df, symbol):
 
     # Booleans for logic
     is_expanded  = df['bb_width'].iloc[-1] > (df['bb_width_avg'].iloc[-1] * 1.2)
-    is_trending  = curr_adx > 25
+    is_trending  = curr_adx > 23
     gap_widening = ema_gap > prev_ema_gap
 
     # --- 3. REASONING & LOGGING ---
@@ -194,24 +194,24 @@ def hybrid_adx_bollinger(df, symbol):
         # Uptrend
         if ema9 > ema200 and curr_price <= ema9:
             sl = ema30
-            tp = curr_price + (curr_atr * 2.5)
-            return execute_scalp(symbol, "BUY", 0.5, curr_price, sl, tp)
+            tp = curr_price + (curr_atr * 2)
+            return execute_scalp(symbol, "BUY", 0.3, curr_price, sl, tp)
         # Downtrend
         elif ema9 < ema200 and curr_price >= ema9:
             sl = ema30
-            tp = curr_price - (curr_atr * 2.5)
-            return execute_scalp(symbol, "SELL", 0.5, curr_price, sl, tp)
+            tp = curr_price - (curr_atr * 2)
+            return execute_scalp(symbol, "SELL", 0.3, curr_price, sl, tp)
 
     elif mode == "RANGE":
         # Buy Bottom
-        if curr_price <= bb_low and curr_rsi < 30:
+        if curr_price <= bb_low and curr_rsi < 35:
             sl = curr_price - (1.5 * curr_atr)
-            tp = ema9
+            tp = curr_price + (1 * curr_atr)
             return execute_scalp(symbol, "BUY", 0.5, curr_price, sl, tp)
         # Sell Top
-        elif curr_price >= bb_up and curr_rsi > 70:
+        elif curr_price >= bb_up and curr_rsi > 68:
             sl = curr_price + (1.5 * curr_atr)
-            tp = ema9
+            tp = curr_price - (1 * curr_atr)
             return execute_scalp(symbol, "SELL", 0.5, curr_price, sl, tp)
 
     return None
