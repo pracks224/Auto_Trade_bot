@@ -449,7 +449,7 @@ def execute_scalp(symbol, side, lot, price, sl, tp):
         "price": float(price),
         "sl": float(round(sl, 2)),
         "tp": float(round(tp, 2)),
-        "magic": 999111, # Unique ID for scalp trades
+        "magic": MAGIC_NUMBER, # Unique ID for scalp trades
         "comment": "BigCandle_Scalp",
         "type_filling": mt5.ORDER_FILLING_FOK,
         "deviation": 3 # Tight deviation for fast moves
