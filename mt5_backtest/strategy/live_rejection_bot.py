@@ -75,7 +75,141 @@ def calculate_regime(df, window=15):
     logger.info(f"[REGIME] R2: {r_squared:.3f} | Slope: {slope:.4f} | Mode: {regime}")
     return slope, r_squared
 
-def hybrid_adx_bollinger(df,symbol):
+def hybrid_adx_bollinger(df, symbol):
+    # --- 1. INDICATOR CALCULATIONS ---
+    # Need to calculate these BEFORE extracting .iloc[-1] values
+    
+    # EMAs
+    df['ema9'] = df['close'].ewm(span=9, adjust=False).mean()
+    df['ema30'] = df['close'].ewm(span=30, adjust=False).mean()
+    df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
+
+    # Bollinger Bands
+    df['bb_mid'] = df['close'].rolling(window=20).mean()
+    bb_std = df['close'].rolling(window=20).std()
+    df['bb_upper'] = df['bb_mid'] + (bb_std * 2)
+    df['bb_lower'] = df['bb_mid'] - (bb_std * 2)
+    df['bb_width'] = df['bb_upper'] - df['bb_lower']
+    df['bb_width_avg'] = df['bb_width'].rolling(window=20).mean()
+
+    # RSI
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['rsi'] = 100 - (100 / (1 + rs))
+
+    # ADX & ATR
+    df['tr'] = np.maximum(df['high'] - df['low'], 
+                np.maximum(abs(df['high'] - df['close'].shift(1)), 
+                abs(df['low'] - df['close'].shift(1))))
+    df['atr_val'] = df['tr'].rolling(window=14).mean()
+    
+    up_move = df['high'] - df['high'].shift(1)
+    dn_move = df['low'].shift(1) - df['low']
+    pos_dm = np.where((up_move > dn_move) & (up_move > 0), up_move, 0)
+    neg_dm = np.where((dn_move > up_move) & (dn_move > 0), dn_move, 0)
+    
+    # Use the calculated ATR for DI calculation
+    pos_di = 100 * (pd.Series(pos_dm).rolling(14).mean() / df['atr_val'])
+    neg_di = 100 * (pd.Series(neg_dm).rolling(14).mean() / df['atr_val'])
+    dx = 100 * (abs(pos_di - neg_di) / (pos_di + neg_di))
+    df['adx'] = dx.rolling(window=14).mean()
+
+    # --- 2. EXTRACT LATEST VALUES (SETUP DATA) ---
+    curr_price = df['close'].iloc[-1]
+    curr_adx   = df['adx'].iloc[-1]
+    curr_rsi   = df['rsi'].iloc[-1]
+    curr_atr   = df['atr_val'].iloc[-1]  # This is a float now
+    ema9       = df['ema9'].iloc[-1]
+    ema30      = df['ema30'].iloc[-1]
+    ema200     = df['ema200'].iloc[-1]
+    bb_up      = df['bb_upper'].iloc[-1]
+    bb_low     = df['bb_lower'].iloc[-1]
+    
+    ema_gap      = abs(ema9 - ema200)
+    prev_ema_gap = abs(df['ema9'].iloc[-2] - df['ema200'].iloc[-2])
+
+    # Booleans for logic
+    is_expanded  = df['bb_width'].iloc[-1] > (df['bb_width_avg'].iloc[-1] * 1.2)
+    is_trending  = curr_adx > 25
+    gap_widening = ema_gap > prev_ema_gap
+
+    # --- 3. REASONING & LOGGING ---
+    mode = "TREND" if (is_expanded and is_trending) else "RANGE"
+    reason = "No setup"
+
+    if mode == "TREND":
+        if not gap_widening:
+            reason = f"Gap not widening ({ema_gap:.2f} <= {prev_ema_gap:.2f})"
+        elif ema9 > ema200:
+            reason = f"Uptrend: Wait for pullback to {ema9:.2f}"
+            if curr_price <= ema9: reason = "BUY SIGNAL (Trend Pullback)"
+        else:
+            reason = f"Downtrend: Wait for pullback to {ema9:.2f}"
+            if curr_price >= ema9: reason = "SELL SIGNAL (Trend Pullback)"
+    else:
+        if curr_rsi >= 30 and curr_rsi <= 70:
+            reason = f"RSI Neutral ({curr_rsi:.1f})"
+        elif curr_price > bb_low and curr_price < bb_up:
+            reason = "Price inside BB bands"
+        elif curr_price <= bb_low and curr_rsi < 30:
+            reason = "BUY SIGNAL (Range Bottom)"
+        elif curr_price >= bb_up and curr_rsi > 70:
+            reason = "SELL SIGNAL (Range Top)"
+
+    logger.info(f"[{mode}] Price: {curr_price:.2f} | ADX: {curr_adx:.1f} | EXPAND: {is_expanded} | GAP_WIDE: {gap_widening} | {reason}")
+
+    # --- 4. EXECUTION LOGIC ---
+    if mode == "TREND" and gap_widening:
+        # Uptrend
+        if ema9 > ema200 and curr_price <= ema9:
+            sl = ema30
+            tp = curr_price + (curr_atr * 2.5)
+            return execute_scalp(symbol, "BUY", 0.5, curr_price, sl, tp)
+        # Downtrend
+        elif ema9 < ema200 and curr_price >= ema9:
+            sl = ema30
+            tp = curr_price - (curr_atr * 2.5)
+            return execute_scalp(symbol, "SELL", 0.5, curr_price, sl, tp)
+
+    elif mode == "RANGE":
+        # Buy Bottom
+        if curr_price <= bb_low and curr_rsi < 30:
+            sl = curr_price - (1.5 * curr_atr)
+            tp = ema9
+            return execute_scalp(symbol, "BUY", 0.5, curr_price, sl, tp)
+        # Sell Top
+        elif curr_price >= bb_up and curr_rsi > 70:
+            sl = curr_price + (1.5 * curr_atr)
+            tp = ema9
+            return execute_scalp(symbol, "SELL", 0.5, curr_price, sl, tp)
+
+    return None
+def hybrid_adx_bollinger_bkp(df,symbol):
+
+    # --- 1. SETUP DATA ---
+    # Extract single float values from the end of the DataFrame
+    curr_price = df['close'].iloc[-1]
+    curr_adx   = df['adx'].iloc[-1]
+    curr_rsi   = df['rsi'].iloc[-1]
+    curr_atr   = df['tr'].rolling(window=14).mean().iloc[-1] # Fixes the 'function' error
+    ema9       = df['ema9'].iloc[-1]
+    ema30      = df['ema30'].iloc[-1]
+    ema200     = df['ema200'].iloc[-1]
+    bb_up      = df['bb_upper'].iloc[-1]
+    bb_low     = df['bb_lower'].iloc[-1]
+    bb_width   = df['bb_width'].iloc[-1]
+    avg_width  = df['bb_width_avg'].iloc[-1]
+
+    # Gap logic
+    ema_gap      = abs(ema9 - ema200)
+    prev_ema_gap = abs(df['ema9'].iloc[-2] - df['ema200'].iloc[-2])
+
+    # Thresholds (Booleans)
+    is_expanded = bb_width > (avg_width * 1.2)
+    is_trending = curr_adx > 25
+    gap_widening = ema_gap > prev_ema_gap
 
     # --- 1. EMAs (For Trend & Stop Loss) ---
     df['ema9'] = df['close'].ewm(span=9, adjust=False).mean()
@@ -116,7 +250,6 @@ def hybrid_adx_bollinger(df,symbol):
     dx = 100 * (abs(pos_di - neg_di) / (pos_di + neg_di))
     df['adx'] = dx.rolling(window=14).mean()
     # --- 1. SETUP DATA ---
-    curr_price = df['close'].iloc[-1]
     ema_gap = abs(df['ema9'].iloc[-1] - df['ema200'].iloc[-1])
     prev_ema_gap = abs(df['ema9'].iloc[-2] - df['ema200'].iloc[-2])
 
@@ -125,22 +258,21 @@ def hybrid_adx_bollinger(df,symbol):
     is_trending = df['adx'].iloc[-1] > 25
 
     # --- 2. EXECUTION LOGIC ---
-
+   logger.info(f" Price: {curr_price:.2f} | ADX: {curr_adx:.1f} | EXPAND: {is_expanded:.1f} | {reason}")
     # MODE A: TRENDING (Expansion + Widening Gap + Strong ADX)
-    if is_expanded and is_trending and (ema_gap > prev_ema_gap):
-        
+    if is_expanded and is_trending and (ema_gap > prev_ema_gap):    
         # Uptrend Pullback
         if df['ema9'].iloc[-1] > df['ema200'].iloc[-1]:
             if curr_price <= df['ema9'].iloc[-1]: # Entry on pullback
                 sl = df['ema30'].iloc[-1]          # SL at EMA30
-                tp = curr_price + (2.5 * atr)
+                tp = curr_price + (current_atr * 2.5)
                 return execute_scalp(symbol, "BUY", 0.5, curr_price, sl, tp)
 
         # Downtrend Pullback
         elif df['ema9'].iloc[-1] < df['ema200'].iloc[-1]:
             if curr_price >= df['ema9'].iloc[-1]: # Entry on pullback
                 sl = df['ema30'].iloc[-1]          # SL at EMA30
-                tp = curr_price - (2.5 * atr)
+                tp = curr_price - (current_atr * 2.5)
                 return execute_scalp(symbol, "SELL", 0.5, curr_price, sl, tp)
 
     # MODE B: RANGE (Squeeze / Low Volatility / Weak ADX)
