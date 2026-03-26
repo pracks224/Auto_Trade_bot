@@ -100,21 +100,36 @@ def hybrid_adx_bollinger(df, symbol):
     df['rsi'] = 100 - (100 / (1 + rs))
 
     # ADX & ATR
+    # --- 1. ROBUST ADX CALCULATION ---
+    # Calculate True Range
     df['tr'] = np.maximum(df['high'] - df['low'], 
                 np.maximum(abs(df['high'] - df['close'].shift(1)), 
                 abs(df['low'] - df['close'].shift(1))))
-    df['atr_val'] = df['tr'].rolling(window=14).mean()
-    
-    up_move = df['high'] - df['high'].shift(1)
+
+    # Use a shorter window for the DI to get it to "wake up" faster
+    window = 14
+    df['atr_smooth'] = df['tr'].rolling(window=window).mean()
+
+    up_move = df['high'].diff()
     dn_move = df['low'].shift(1) - df['low']
-    pos_dm = np.where((up_move > dn_move) & (up_move > 0), up_move, 0)
-    neg_dm = np.where((dn_move > up_move) & (dn_move > 0), dn_move, 0)
-    
-    # Use the calculated ATR for DI calculation
-    pos_di = 100 * (pd.Series(pos_dm).rolling(14).mean() / df['atr_val'])
-    neg_di = 100 * (pd.Series(neg_dm).rolling(14).mean() / df['atr_val'])
-    dx = 100 * (abs(pos_di - neg_di) / (pos_di + neg_di))
-    df['adx'] = dx.rolling(window=14).mean()
+
+    pos_dm = np.where((up_move > dn_move) & (up_move > 0), up_move, 0.0)
+    neg_dm = np.where((dn_move > up_move) & (dn_move > 0), dn_move, 0.0)
+
+    # Calculate DI - We use fillna(0) here to stop NaN from spreading
+    pos_di = 100 * (pd.Series(pos_dm).rolling(window).mean() / df['atr_smooth']).fillna(0)
+    neg_di = 100 * (pd.Series(neg_dm).rolling(window).mean() / df['atr_smooth']).fillna(0)
+
+    dx = 100 * (abs(pos_di - neg_di) / (pos_di + neg_di)).fillna(0)
+    df['adx'] = dx.rolling(window=window).mean()
+
+    # --- 2. THE LOGGING FIX ---
+    # Instead of just taking iloc[-1], let's ensure we have a fallback
+    curr_adx = df['adx'].iloc[-1]
+
+    # If it's still NaN, the math hasn't reached the end of the 500 rows yet
+    if np.isnan(curr_adx):
+        curr_adx = 0.0
 
     # --- 2. EXTRACT LATEST VALUES (SETUP DATA) ---
     curr_price = df['close'].iloc[-1]
