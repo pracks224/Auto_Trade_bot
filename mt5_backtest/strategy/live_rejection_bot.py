@@ -76,6 +76,20 @@ def calculate_regime(df, window=15):
     return slope, r_squared
 
 def hybrid_adx_bollinger(df,symbol):
+
+    # 3. Calculate your EMAs (9, 30, and 200)
+    df['ema9'] = ta.ema(df['close'], length=9)
+    df['ema30'] = ta.ema(df['close'], length=30)
+    df['ema200'] = ta.ema(df['close'], length=200)
+    # 4. Bollinger Bands (for your Squeeze/Expansion logic)
+    bbands = ta.bbands(df['close'], length=20, std=2)
+    df['bb_upper'] = bbands['BBU_20_2.0']
+    df['bb_mid'] = bbands['BBM_20_2.0']
+    df['bb_lower'] = bbands['BBL_20_2.0']
+
+    # 5. NOW calculate the Width and Average Width
+    df['bb_width'] = df['bb_upper'] - df['bb_lower']
+    df['bb_width_avg'] = df['bb_width'].rolling(window=20).mean()
     # --- 1. CALCULATE INPUTS ---
     # Gap and Momentum
     ema_gap = abs(df['ema9'].iloc[-1] - df['ema200'].iloc[-1])
@@ -93,6 +107,14 @@ def hybrid_adx_bollinger(df,symbol):
 
     # 4. Use these for your switch
     is_expanded = current_bb_width > (avg_bb_width * 1.2)
+
+    # 1. Calculate ADX (Standard 14 period)
+    # This returns a DataFrame with ADX, DMP, and DMN. We only need 'ADX_14'
+    adx_df = ta.adx(df['high'], df['low'], df['close'], length=14)
+    df['adx'] = adx_df['ADX_14']
+    
+    # 2. Calculate RSI (Standard 14 period) for your Range Mode
+    df['rsi'] = ta.rsi(df['close'], length=14)
 
     # Leading Indicators
     adx = df['adx'].iloc[-1]  # Strength (>25 is trending)
