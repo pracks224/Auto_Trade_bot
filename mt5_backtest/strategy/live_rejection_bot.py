@@ -144,7 +144,7 @@ def hybrid_adx_bollinger(df,symbol):
                 return execute_scalp(symbol, "SELL", 0.5, curr_price, sl, tp)
 
     # MODE B: RANGE (Squeeze / Low Volatility / Weak ADX)
-    elif bb_width <= avg_bb_width or adx <= 25:
+    elif not is_expanded or not is_trending:
         
         # Buy the Bottom of the Range
         if curr_price <= df['bb_lower'].iloc[-1] and rsi < 30:
