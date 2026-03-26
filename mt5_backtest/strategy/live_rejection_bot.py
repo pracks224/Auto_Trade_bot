@@ -163,6 +163,9 @@ def hybrid_adx_bollinger(df, symbol):
     is_expanded  = df['bb_width'].iloc[-1] > (df['bb_width_avg'].iloc[-1] * 1.2)
     is_trending  = curr_adx > 20
     gap_widening = ema_gap > prev_ema_gap
+    stretch = abs(curr_price - ema9)
+    # Use 3x ATR as the "Extreme" marker for Gold
+    is_overstretched = stretch > (curr_atr * 2.0)
 
     # --- 3. REASONING & LOGGING ---
     mode = "TREND" if (is_expanded and is_trending) else "RANGE"
@@ -204,15 +207,25 @@ def hybrid_adx_bollinger(df, symbol):
 
     elif mode == "RANGE":
         # Buy Bottom
-        if curr_price <= bb_low and curr_rsi < 33:
+        if curr_price <= bb_low and curr_rsi < 30:
             sl = ema30
             tp = curr_price + (1 * curr_atr)
             return execute_scalp(symbol, "BUY", 0.5, curr_price, sl, tp)
         # Sell Top
-        elif curr_price >= bb_up and curr_rsi > 68:
+        elif curr_price >= bb_up and curr_rsi > 70:
             sl = ema30
             tp = curr_price - (1 * curr_atr)
             return execute_scalp(symbol, "SELL", 0.5, curr_price, sl, tp)
+        elif is_overstretched and curr_rsi < 28 or curr_price <= bb_low:
+            reason = "REVERSAL BUY: Extreme RSI or BB Touch"
+            logger.info(f"{reason}")
+            return execute_scalp(symbol, "BUY", 0.5, curr_price, curr_price - (curr_atr * 2), ema9)
+    
+        # SELL if RSI is extreme OR price is at BB Top
+        elif is_overstretched and curr_rsi > 72 or curr_price >= bb_up:
+            reason = "REVERSAL SELL: Extreme RSI or BB Touch"
+            logger.info(f"{reason}")
+            return execute_scalp(symbol, "SELL", 0.5, curr_price, curr_price + (curr_atr * 2), ema9)
 
     return None
 def hybrid_adx_bollinger_bkp(df,symbol):
