@@ -74,7 +74,34 @@ def calculate_regime(df, window=15):
     # The Log Line
     logger.info(f"[REGIME] R2: {r_squared:.3f} | Slope: {slope:.4f} | Mode: {regime}")
     return slope, r_squared
+def calculate_adx_robust(df, window=14):
+    # 1. True Range
+    df['h-l'] = df['high'] - df['low']
+    df['h-pc'] = abs(df['high'] - df['close'].shift(1))
+    df['l-pc'] = abs(df['low'] - df['close'].shift(1))
+    df['tr'] = df[['h-l', 'h-pc', 'l-pc']].max(axis=1)
 
+    # 2. Directional Movement
+    df['up'] = df['high'].diff()
+    df['down'] = df['low'].shift(1) - df['low']
+    
+    df['+dm'] = np.where((df['up'] > df['down']) & (df['up'] > 0), df['up'], 0.0)
+    df['-dm'] = np.where((df['down'] > df['up']) & (df['down'] > 0), df['down'], 0.0)
+
+    # 3. Use EWM (Wilder's Smoothing) - This is the "Magic" that prevents 0.0
+    alpha = 1/window
+    tr_smooth = df['tr'].ewm(alpha=alpha, adjust=False).mean()
+    plus_di = 100 * (df['+dm'].ewm(alpha=alpha, adjust=False).mean() / tr_smooth)
+    minus_di = 100 * (df['-dm'].ewm(alpha=alpha, adjust=False).mean() / tr_smooth)
+
+    # 4. DX calculation with a tiny epsilon to avoid divide-by-zero
+    # This ensures that if the market is flat, ADX is 0, but it can WAKE UP later
+    dx = 100 * (abs(plus_di - minus_di) / (plus_di + minus_di + 1e-10))
+    
+    # 5. Final ADX
+    df['adx'] = dx.ewm(alpha=alpha, adjust=False).mean()
+    
+    return df['adx'].iloc[-1]
 def hybrid_adx_bollinger(df, symbol):
     # --- 1. INDICATOR CALCULATIONS ---
     # Need to calculate these BEFORE extracting .iloc[-1] values
@@ -108,24 +135,11 @@ def hybrid_adx_bollinger(df, symbol):
 
     # Use a shorter window for the DI to get it to "wake up" faster
     window = 14
-    df['atr_smooth'] = df['tr'].rolling(window=window).mean()
-
-    up_move = df['high'].diff()
-    dn_move = df['low'].shift(1) - df['low']
-
-    pos_dm = np.where((up_move > dn_move) & (up_move > 0), up_move, 0.0)
-    neg_dm = np.where((dn_move > up_move) & (dn_move > 0), dn_move, 0.0)
-
-    # Calculate DI - We use fillna(0) here to stop NaN from spreading
-    pos_di = 100 * (pd.Series(pos_dm).rolling(window).mean() / df['atr_smooth']).fillna(0)
-    neg_di = 100 * (pd.Series(neg_dm).rolling(window).mean() / df['atr_smooth']).fillna(0)
-
-    dx = 100 * (abs(pos_di - neg_di) / (pos_di + neg_di)).fillna(0)
-    df['adx'] = dx.rolling(window=window).mean()
+    df['atr_smooth'] = df['tr'].rolling(window=window).mean() 
 
     # --- 2. THE LOGGING FIX ---
     # Instead of just taking iloc[-1], let's ensure we have a fallback
-    curr_adx = df['adx'].iloc[-1]
+    curr_adx = calculate_adx_robust(df,window)
 
     # If it's still NaN, the math hasn't reached the end of the 500 rows yet
     if np.isnan(curr_adx):
@@ -133,9 +147,9 @@ def hybrid_adx_bollinger(df, symbol):
 
     # --- 2. EXTRACT LATEST VALUES (SETUP DATA) ---
     curr_price = df['close'].iloc[-1]
-    curr_adx   = df['adx'].iloc[-1]
+   # curr_adx   = df['adx'].iloc[-1]
     curr_rsi   = df['rsi'].iloc[-1]
-    curr_atr   = df['atr_val'].iloc[-1]  # This is a float now
+    curr_atr   = df['atr_smooth'].iloc[-1]  # This is a float now
     ema9       = df['ema9'].iloc[-1]
     ema30      = df['ema30'].iloc[-1]
     ema200     = df['ema200'].iloc[-1]
