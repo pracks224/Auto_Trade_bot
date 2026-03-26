@@ -77,53 +77,57 @@ def calculate_regime(df, window=15):
 
 def hybrid_adx_bollinger(df,symbol):
 
-    # 3. Calculate your EMAs (9, 30, and 200)
-    df['ema9'] = ta.ema(df['close'], length=9)
-    df['ema30'] = ta.ema(df['close'], length=30)
-    df['ema200'] = ta.ema(df['close'], length=200)
-    # 4. Bollinger Bands (for your Squeeze/Expansion logic)
-    bbands = ta.bbands(df['close'], length=20, std=2)
-    df['bb_upper'] = bbands['BBU_20_2.0']
-    df['bb_mid'] = bbands['BBM_20_2.0']
-    df['bb_lower'] = bbands['BBL_20_2.0']
+    # --- 1. EMAs (For Trend & Stop Loss) ---
+    df['ema9'] = df['close'].ewm(span=9, adjust=False).mean()
+    df['ema30'] = df['close'].ewm(span=30, adjust=False).mean()
+    df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
 
-    # 5. NOW calculate the Width and Average Width
+    # --- 2. Bollinger Bands (For Squeeze/Expansion) ---
+    df['bb_mid'] = df['close'].rolling(window=20).mean()
+    bb_std = df['close'].rolling(window=20).std()
+    df['bb_upper'] = df['bb_mid'] + (bb_std * 2)
+    df['bb_lower'] = df['bb_mid'] - (bb_std * 2)
     df['bb_width'] = df['bb_upper'] - df['bb_lower']
     df['bb_width_avg'] = df['bb_width'].rolling(window=20).mean()
-    # --- 1. CALCULATE INPUTS ---
-    # Gap and Momentum
+
+    # --- 3. RSI (For Range Mode) ---
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['rsi'] = 100 - (100 / (1 + rs))
+
+    # --- 4. ADX (Leading Trend Strength) ---
+    # Calculate True Range
+    df['tr'] = np.maximum(df['high'] - df['low'], 
+                np.maximum(abs(df['high'] - df['close'].shift(1)), 
+                abs(df['low'] - df['close'].shift(1))))
+    atr = df['tr'].rolling(window=14).mean()
+    
+    up_move = df['high'] - df['high'].shift(1)
+    dn_move = df['low'].shift(1) - df['low']
+    
+    pos_dm = np.where((up_move > dn_move) & (up_move > 0), up_move, 0)
+    neg_dm = np.where((dn_move > up_move) & (dn_move > 0), dn_move, 0)
+    
+    pos_di = 100 * (pd.Series(pos_dm).rolling(14).mean() / atr)
+    neg_di = 100 * (pd.Series(neg_dm).rolling(14).mean() / atr)
+    
+    dx = 100 * (abs(pos_di - neg_di) / (pos_di + neg_di))
+    df['adx'] = dx.rolling(window=14).mean()
+    # --- 1. SETUP DATA ---
+    current_price = df['close'].iloc[-1]
     ema_gap = abs(df['ema9'].iloc[-1] - df['ema200'].iloc[-1])
     prev_ema_gap = abs(df['ema9'].iloc[-2] - df['ema200'].iloc[-2])
-    gap_widening = ema_gap > prev_ema_gap
 
-    # Volatility (Squeeze vs Expansion)
-    # 1. Create the column for the entire DataFrame first
-    df['bb_width'] = df['bb_upper'] - df['bb_lower']
-    # 2. Calculate the rolling average on the column
-    df['bb_width_avg'] = df['bb_width'].rolling(window=20).mean()
-    # 3. Now extract the values for your logic
-    current_bb_width = df['bb_width'].iloc[-1]
-    avg_bb_width = df['bb_width_avg'].iloc[-1]
-
-    # 4. Use these for your switch
-    is_expanded = current_bb_width > (avg_bb_width * 1.2)
-
-    # 1. Calculate ADX (Standard 14 period)
-    # This returns a DataFrame with ADX, DMP, and DMN. We only need 'ADX_14'
-    adx_df = ta.adx(df['high'], df['low'], df['close'], length=14)
-    df['adx'] = adx_df['ADX_14']
-    
-    # 2. Calculate RSI (Standard 14 period) for your Range Mode
-    df['rsi'] = ta.rsi(df['close'], length=14)
-
-    # Leading Indicators
-    adx = df['adx'].iloc[-1]  # Strength (>25 is trending)
-    rsi = df['rsi'].iloc[-1]  # Overbought/Oversold for Range
+    # Thresholds
+    is_expanded = df['bb_width'].iloc[-1] > (df['bb_width_avg'].iloc[-1] * 1.2)
+    is_trending = df['adx'].iloc[-1] > 25
 
     # --- 2. EXECUTION LOGIC ---
 
     # MODE A: TRENDING (Expansion + Widening Gap + Strong ADX)
-    if is_expanded and adx > 25 and gap_widening:
+    if is_expanded and is_trending and (ema_gap > prev_ema_gap):
         
         # Uptrend Pullback
         if df['ema9'].iloc[-1] > df['ema200'].iloc[-1]:
