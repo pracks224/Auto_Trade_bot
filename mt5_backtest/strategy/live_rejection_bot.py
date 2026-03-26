@@ -116,7 +116,7 @@ def hybrid_adx_bollinger(df,symbol):
     dx = 100 * (abs(pos_di - neg_di) / (pos_di + neg_di))
     df['adx'] = dx.rolling(window=14).mean()
     # --- 1. SETUP DATA ---
-    current_price = df['close'].iloc[-1]
+    curr_price = df['close'].iloc[-1]
     ema_gap = abs(df['ema9'].iloc[-1] - df['ema200'].iloc[-1])
     prev_ema_gap = abs(df['ema9'].iloc[-2] - df['ema200'].iloc[-2])
 
