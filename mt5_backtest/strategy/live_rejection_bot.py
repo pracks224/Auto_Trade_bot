@@ -83,9 +83,16 @@ def hybrid_adx_bollinger(df,symbol):
     gap_widening = ema_gap > prev_ema_gap
 
     # Volatility (Squeeze vs Expansion)
-    bb_width = df['bb_upper'].iloc[-1] - df['bb_lower'].iloc[-1]
-    avg_bb_width = df['bb_width'].rolling(window=20).mean().iloc[-1]
-    is_expanded = bb_width > (avg_bb_width * 1.2) # 20% wider than average
+    # 1. Create the column for the entire DataFrame first
+    df['bb_width'] = df['bb_upper'] - df['bb_lower']
+    # 2. Calculate the rolling average on the column
+    df['bb_width_avg'] = df['bb_width'].rolling(window=20).mean()
+    # 3. Now extract the values for your logic
+    current_bb_width = df['bb_width'].iloc[-1]
+    avg_bb_width = df['bb_width_avg'].iloc[-1]
+
+    # 4. Use these for your switch
+    is_expanded = current_bb_width > (avg_bb_width * 1.2)
 
     # Leading Indicators
     adx = df['adx'].iloc[-1]  # Strength (>25 is trending)
