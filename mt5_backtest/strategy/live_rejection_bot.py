@@ -212,17 +212,17 @@ def hybrid_adx_bollinger(df, symbol):
         # BUY LOGIC
         if curr_price <= bb_low or curr_rsi < 28 or (is_overstretched and curr_price < ema9):
             # The "Hook": Wait for price to show a tiny bit of recovery or RSI to turn
-            if candle_body>curr_atr and curr_price > prev_price or curr_rsi > df['rsi'].iloc[-2]:
+            if candle_body>curr_atr and curr_price > prev_price:
                 reason = "REVERSAL BUY: RSI/BB Extreme + Hook"
-                logger.info(f"[SIGNAL] {reason} | Price: {curr_price:.2f}")
+                logger.info(f"[SIGNAL] {reason} | Price: {curr_price:.2f} | IS_OVERSTRETCHED: {is_overstretched}")
                 # TP is the Middle Band (Reversion to mean)
                 return execute_scalp(symbol, "BUY", 0.45, curr_price, curr_price - (curr_atr * 2), bb_mid)
         
         # SELL LOGIC
         elif curr_price >= bb_up or curr_rsi > 72 or (is_overstretched and curr_price > ema9):
-            if candle_body>curr_atr and curr_price < prev_price or curr_rsi < df['rsi'].iloc[-2]:
+            if candle_body>curr_atr and curr_price < prev_price:
                 reason = "REVERSAL SELL: RSI/BB Extreme + Hook"
-                logger.info(f"[SIGNAL] {reason} | Price: {curr_price:.2f}")
+                logger.info(f"[SIGNAL] {reason} | Price: {curr_price:.2f}|IS_OVERSTRETCHED: {is_overstretched}")
                 return execute_scalp(symbol, "SELL", 0.45, curr_price, curr_price + (curr_atr * 2), bb_mid)       
     return None
 
