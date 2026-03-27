@@ -259,52 +259,35 @@ def hybrid_adx_bollinger(df, symbol):
             return execute_scalp(symbol, "SELL", 0.32, curr_price, sl, tp,MAGIC_NUMBER_TRENDING)
 
     elif mode == "RANGE":
+        # --- THE DIAGNOSTIC LOGGER ---
+        dist_to_low = curr_price - bb_low
+        dist_to_up = bb_up - curr_price
         # 1. SETUP PARAMETERS
-        proximity_buffer = 0.20  # Zone near the bands
-        buffer = 0.30            # Zone near the ceiling
-        symbol_info = mt5.symbol_info(symbol)
-        digits = symbol_info.digits if symbol_info else 2
+        range_entry_buffer = 0.85
+        # 1. Check if price is within the 'Active Zone'
+        is_in_buy_zone = curr_price <= (bb_low + range_entry_buffer)
+        is_in_sell_zone = curr_price >= (bb_up - range_entry_buffer)
 
-        # 2. PROXIMITY CHECKS
-        is_near_bb_low = curr_price <= (bb_low + proximity_buffer)
-        is_near_bb_up = curr_price >= (bb_up - buffer)
+        # 2. The Confirmation (The Hook)
         is_turning_up = curr_price > prev_price
         is_turning_down = curr_price < prev_price
 
-        # --- BUY LOGIC ---
-        if (is_near_bb_low and is_turning_up and curr_rsi < 45) or (is_overstretched and curr_price < ema9):
-            if is_turning_up or candle_body >= (curr_atr * 0.5):
-                reason = "REVERSAL BUY: RSI/BB Extreme + Hook"
-                
-                # SAFE SL CALCULATION: Stop below the band or ATR low
-                # Rounding to 2 digits is critical for XAUUSD
-                sl_price = round(min(bb_low, curr_price) - (curr_atr * 1.2), digits)
-                tp_price = round(bb_mid, digits)
+        logger.info(f"--- [RANGE CHECK] Price: {curr_price:.2f} | RSI: {curr_rsi:.1f} | "
+                    f"Gap_Low: {dist_to_low:.2f} (Target: <{range_entry_buffer}) | "
+                    f"Hook: {'UP' if is_turning_up else 'DOWN' if is_turning_down else 'FLAT'} ---")
 
-                # EMERGENCY CHECK: If SL is too close, push it back
-                if abs(curr_price - sl_price) < 0.3:
-                    sl_price = round(curr_price - 0.5, digits)
+        # BUY LOGIC
+        if is_in_buy_zone and is_turning_up and curr_rsi < 45:
+            # This would have triggered at 19:05:24 because 0.81 < 0.85
+            reason = "RANGE BUY: Hook confirmed in Zone"
+            last_trade_candle_time = current_candle_time
+            return execute_scalp(symbol, "BUY", 0.45, curr_price, bb_low - (curr_atr), bb_mid, MAGIC_NUMBER_RANGE)
 
-                logger.info(f"[SIGNAL] {reason} | Price: {curr_price:.2f} | SL: {sl_price}")
-                last_trade_candle_time = current_candle_time
-                return execute_scalp(symbol, "BUY", 0.45, curr_price, sl_price, tp_price, MAGIC_NUMBER_RANGE)
-
-        # --- SELL LOGIC ---
-        elif (is_near_bb_up and is_turning_down and curr_rsi > 60) or (is_overstretched and curr_price > ema9):
-            if is_turning_down or candle_body >= (curr_atr * 0.5):
-                reason = "REVERSAL SELL: RSI/BB Extreme + Hook"
-                
-                # SAFE SL CALCULATION: Stop above the band or ATR high
-                sl_price = round(max(bb_up, curr_price) + (curr_atr * 1.2), digits)
-                tp_price = round(bb_mid, digits)
-
-                # EMERGENCY CHECK: If SL is too close, push it back
-                if abs(curr_price - sl_price) < 0.3:
-                    sl_price = round(curr_price + 0.5, digits)
-
-                logger.info(f"[SIGNAL] {reason} | Price: {curr_price:.2f} | SL: {sl_price}")
-                last_trade_candle_time = current_candle_time
-                return execute_scalp(symbol, "SELL", 0.45, curr_price, sl_price, tp_price, MAGIC_NUMBER_RANGE)       
+        # SELL LOGIC
+        elif is_in_sell_zone and is_turning_down and curr_rsi > 65:
+            reason = "RANGE SELL: Hook confirmed in Zone"
+            last_trade_candle_time = current_candle_time
+            return execute_scalp(symbol, "SELL", 0.45, curr_price, bb_up + (curr_atr), bb_mid, MAGIC_NUMBER_RANGE)     
     return None
 
 def rsquar_startergy(df,symbol):
