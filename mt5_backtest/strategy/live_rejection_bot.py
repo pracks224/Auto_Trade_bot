@@ -27,6 +27,7 @@ TIMEFRAME = mt5.TIMEFRAME_M1
 MAX_LOSS = 500
 CHECK_INTERVAL = 30  
 MAGIC_NUMBER = 123456
+MAGIC_NUMBER_TRENDING = 123456
 last_max_loss_time = 0
 COOLDOWN_PERIOD = 900
 
@@ -103,9 +104,6 @@ def calculate_adx_robust(df, window=14):
     
     return df['adx'].iloc[-1]
 def hybrid_adx_bollinger(df, symbol):
-    # --- 1. INDICATOR CALCULATIONS ---
-    # Need to calculate these BEFORE extracting .iloc[-1] values
-    
     # EMAs
     df['ema9'] = df['close'].ewm(span=9, adjust=False).mean()
     df['ema30'] = df['close'].ewm(span=30, adjust=False).mean()
@@ -157,6 +155,41 @@ def hybrid_adx_bollinger(df, symbol):
     bb_up      = df['bb_upper'].iloc[-1]
     bb_low     = df['bb_lower'].iloc[-1]
     bb_mid     = df['bb_mid'].iloc[-1]
+
+    current_candle_time = df.index[-1]
+    # --- NEW SECTION: TREND WEAKNESS & MANAGEMENT ---
+    # We check if a Trend Position is already open before looking for new ones
+
+    open_trend_pos = mt5.positions_get(symbol=symbol, magic=MAGIC_NUMBER_TRENDING)
+
+    if open_trend_pos:
+        pos = open_trend_pos[0] # You mentioned you only have one trend position
+        
+        # WEAKNESS LOGIC
+        # 1. ADX Drop: Trend is turning into a Range
+        adx_weak = curr_adx < 22 
+        # 2. Structural Break: Price crossed the EMA9 "Ceiling/Floor"
+        structure_break = False
+        if pos.type == mt5.POSITION_TYPE_SELL:
+            structure_break = curr_price > (ema9 + 0.3)
+        else:
+            structure_break = curr_price < (ema9 - 0.3)
+            
+        if adx_weak or structure_break:
+            reason = "WEAKNESS: ADX Low" if adx_weak else "WEAKNESS: EMA9 Break"
+            logger.info(f"[EXIT] Closing Trend Position | {reason} | ADX: {curr_adx:.1f}")
+            mt5.Close(symbol, ticket=pos.ticket)
+            
+            # LOCK THE GATE: Don't jump back in on this same candle
+            global last_trade_candle_time
+            last_trade_candle_time = current_candle_time
+            return None # Exit function, we are done for this tick
+
+    # --- 2. ENTRY LOGIC GATE ---
+    # Only proceed to Entry Logic if we haven't traded this candle yet
+    global last_trade_candle_time
+    if current_candle_time == last_trade_candle_time:
+        return None
     
     ema_gap      = abs(ema9 - ema200)
     prev_ema_gap = abs(df['ema9'].iloc[-2] - df['ema200'].iloc[-2])
@@ -194,36 +227,40 @@ def hybrid_adx_bollinger(df, symbol):
             reason = "SELL SIGNAL (Range Top)"
 
     logger.info(f"[{mode}] CANDLE: {candle_body:.2f} | ADX: {curr_adx:.1f} | EXPAND: {is_expanded} | GAP_WIDE: {gap_widening} | {reason}")
-
+ 
     # --- 4. EXECUTION LOGIC ---
     if mode == "TREND" and gap_widening:
         # Uptrend
         if ema9 > ema200 :
             sl = ema9
-            tp = curr_price + (curr_atr * 1.5)
-            return execute_scalp(symbol, "BUY", 0.32, curr_price, sl, tp)
+            tp = curr_price + (curr_atr * 15)
+            last_trade_candle_time = current_candle_time # Lock Gate
+            return execute_scalp(symbol, "BUY", 0.32, curr_price, sl, tp,MAGIC_NUMBER_TRENDING)
         # Downtrend
         elif ema9 < ema200 :
             sl = ema9
-            tp = curr_price - (curr_atr * 1.5)
-            return execute_scalp(symbol, "SELL", 0.32, curr_price, sl, tp)
+            tp = curr_price - (curr_atr * 15)
+            last_trade_candle_time = current_candle_time # Lock Gate
+            return execute_scalp(symbol, "SELL", 0.32, curr_price, sl, tp,MAGIC_NUMBER_TRENDING)
 
     elif mode == "RANGE":
         # BUY LOGIC
-        if curr_price <= bb_low or curr_rsi < 28 or (is_overstretched and curr_price < ema9):
+        if curr_price <= bb_low and curr_rsi < 30 or (is_overstretched and curr_price < ema9):
             # The "Hook": Wait for price to show a tiny bit of recovery or RSI to turn
-            if candle_body>=curr_atr and curr_price > prev_price:
+            if curr_price > prev_price and candle_body >= (curr_atr * 0.5):
                 reason = "REVERSAL BUY: RSI/BB Extreme + Hook"
                 logger.info(f"[SIGNAL] {reason} | Price: {curr_price:.2f} | IS_OVERSTRETCHED: {is_overstretched}")
                 # TP is the Middle Band (Reversion to mean)
-                return execute_scalp(symbol, "BUY", 0.45, curr_price, curr_price - (curr_atr * 2), bb_mid)
+                last_trade_candle_time = current_candle_time # Lock Gate
+                return execute_scalp(symbol, "BUY", 0.45, curr_price, bb_low - (curr_atr), bb_mid)
         
         # SELL LOGIC
-        elif curr_price >= bb_up or curr_rsi > 72 or (is_overstretched and curr_price > ema9):
-            if candle_body>=curr_atr and curr_price < prev_price:
+        elif curr_price >= bb_up and curr_rsi > 70 or (is_overstretched and curr_price > ema9):
+            if curr_price < prev_price and candle_body >= (curr_atr * 0.5):
                 reason = "REVERSAL SELL: RSI/BB Extreme + Hook"
                 logger.info(f"[SIGNAL] {reason} | Price: {curr_price:.2f}|IS_OVERSTRETCHED: {is_overstretched}")
-                return execute_scalp(symbol, "SELL", 0.45, curr_price, curr_price + (curr_atr * 2), bb_mid)       
+                last_trade_candle_time = current_candle_time # Lock Gate
+                return execute_scalp(symbol, "SELL", 0.45, curr_price, bb_up + (curr_atr), bb_mid)       
     return None
 
 def rsquar_startergy(df,symbol):
@@ -305,8 +342,8 @@ def modify_sl(ticket, sl, tp):
     }
     return mt5.order_send(request)
 
-def set_break_even(symbol, atr_value, multiplier=1.2):
-    positions = mt5.positions_get(symbol=symbol, magic=MAGIC_NUMBER)
+def set_break_even(symbol, atr_value, multiplier=1.2,magic_num=MAGIC_NUMBER):
+    positions = mt5.positions_get(symbol=symbol, magic=magic_num)
     if not positions: return
     
     for pos in positions:
@@ -318,8 +355,8 @@ def set_break_even(symbol, atr_value, multiplier=1.2):
             if (pos.price_open - tick.ask) >= (atr_value * multiplier) and (pos.sl > pos.price_open or pos.sl == 0):
                 modify_sl(pos.ticket, pos.price_open - 0.10, pos.tp)
 
-def update_trailing_stop(symbol, atr_value, trail_multiplier=1.5):
-    positions = mt5.positions_get(symbol=symbol, magic=MAGIC_NUMBER)
+def update_trailing_stop(symbol, atr_value, trail_multiplier=1.5,magic_num=MAGIC_NUMBER):
+    positions = mt5.positions_get(symbol=symbol, magic=magic_num)
     if not positions:
         return
 
@@ -442,8 +479,8 @@ def place_trade(symbol, side, lot, price, atr_value, tp_multiplier=2.5):
     send_telegram(f" {side} {lot} {symbol} at {price}\nSL: {sl}\nTP: {tp}")
     return True
 
-def close_all_positions(symbol):
-    positions = mt5.positions_get(symbol=symbol, magic=MAGIC_NUMBER)
+def close_all_positions(symbol,magic_num=MAGIC_NUMBER):
+    positions = mt5.positions_get(symbol=symbol, magic=magic_num)
     if not positions: return
     
     for pos in positions:
@@ -538,7 +575,7 @@ def check_big_candle_momentum(df, symbol, lot_size=1.0, tp_pips=10):
         
     return False
 
-def execute_scalp(symbol, side, lot, price, sl, tp):
+def execute_scalp(symbol, side, lot, price, sl, tp,magic=MAGIC_NUMBER):
     """Internal execution for the scalper logic"""
     order_type = mt5.ORDER_TYPE_BUY if side == "BUY" else mt5.ORDER_TYPE_SELL
     
@@ -550,7 +587,7 @@ def execute_scalp(symbol, side, lot, price, sl, tp):
         "price": float(price),
         "sl": float(round(sl, 2)),
         "tp": float(round(tp, 2)),
-        "magic": MAGIC_NUMBER, # Unique ID for scalp trades
+        "magic": magic, # Unique ID for scalp trades
         "comment": "BigCandle_Scalp",
         "type_filling": mt5.ORDER_FILLING_FOK,
         "deviation": 3 # Tight deviation for fast moves
@@ -629,52 +666,7 @@ while True:
             if time.time() - last_max_loss_time < COOLDOWN_PERIOD:
                 # Optional: logger.info("In Max Loss Cooldown... waiting.")
                 continue
-
-            # 2. Trade Management
-            #set_break_even(sym, atr_v)
-            #update_trailing_stop(sym, atr_v)
-
-            # 3. New Entry Logic
-            open_pos = mt5.positions_get(symbol=sym, magic=MAGIC_NUMBER)
-            if not open_pos:
-                hybrid_adx_bollinger(df, sym)
-                #rsquar_startergy(df, sym)
-                #rubber_band_strategy(df, sym)
-                '''
-                lot_size = dynamic_lot(sym, atr_v)
-                ema9_dist = abs(last['close'] - last['ema9'])
-                is_overextended = ema9_dist > (atr_v * 1.2) # Tightened for Gold
-                
-                # BUY: Trend up, Oversold, at Support
-                if last['ema9'] > last['ema200'] and last['close'] > last['ema9'] and last['rsi'] <= 35 and last['close'] <= last['bb_lower'] * 1.005:
-                    place_trade(sym, "BUY", lot_size, last['close'], atr_v)
-                
-                # SELL: Trend down, Overbought, at Resistance
-                elif last['ema9'] < last['ema200'] and last['close'] < last['ema9'] and last['rsi'] >= 65 and last['close'] >= last['bb_upper'] * 0.995:
-                    place_trade(sym, "SELL", lot_size, last['close'], atr_v)
-                # --- SCENARIO B: INTENSE TREND BREAKOUT (THE NEW ADDITION) ---
-                # Only triggers if Scenario A hasn't happened yet
-                
-                elif not is_overextended:
-                    # BEARISH BREAKOUT: EMA Gap is huge + we broke the previous Low
-                    if last['ema9'] < last['ema200'] and last['close'] < last['ema9'] and last['rsi'] > 30 and ema_gap > TREND_GAP_MIN:
-                        if last['close'] < prev['low']:
-                            small_lot = 0.25
-                            logger.info(f"INTENSE BEARISH: Gap {ema_gap:.2f} | Breaking Low {prev['low']}")
-                            place_trade(sym, "SELL", small_lot, last['close'], atr_v, tp_multiplier=QUICK_TP_MULT)
-                    
-                    # BULLISH BREAKOUT: EMA Gap is huge + we broke the previous High
-                    elif last['ema9'] > last['ema200'] and last['close'] > last['ema9'] and  last['rsi'] < 70 and ema_gap > TREND_GAP_MIN:
-                        if last['close'] > prev['high']:
-                            small_lot = 0.25
-                            logger.info(f" INTENSE BULLISH: Gap {ema_gap:.2f} | Breaking High {prev['high']}")
-                            place_trade(sym, "BUY", small_lot, last['close'], atr_v, tp_multiplier=QUICK_TP_MULT)
-                    # Only check Big Candle if Breakout didn't trigger
-                    else:
-                        check_big_candle_momentum(df, sym, lot_size=1.0, tp_pips=10)
-                else:
-                    logger.warning(f"OVEREXTENDED: Price is {ema9_dist:.2f} away from EMA9. Standing down.")
-                '''
+            hybrid_adx_bollinger(df,sym)
     except Exception as e:
         logger.error(f"Loop Error: {e}")
     
