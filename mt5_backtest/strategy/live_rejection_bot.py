@@ -349,7 +349,7 @@ def dynamic_lot(symbol, atr_value):
     # 3. Ensure it's at least the broker minimum (0.01)
     return max(0.01, lot)
 
-def modify_sl(ticket, sl, tp):
+def modify_sl(ticket, sl, tp=0.0):
     request = {
         "action": mt5.TRADE_ACTION_SLTP,
         "position": ticket,
