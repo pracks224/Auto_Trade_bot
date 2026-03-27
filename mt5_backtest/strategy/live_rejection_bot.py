@@ -163,7 +163,7 @@ def hybrid_adx_bollinger(df, symbol):
 
     # Booleans for logic
     is_expanded  = df['bb_width'].iloc[-1] > (df['bb_width_avg'].iloc[-1] * 1.2)
-    is_trending  = curr_adx > 21
+    is_trending  = curr_adx > 24
     gap_widening = ema_gap > prev_ema_gap
     stretch = abs(curr_price - ema9)
     # Use 3x ATR as the "Extreme" marker for Gold
@@ -184,7 +184,7 @@ def hybrid_adx_bollinger(df, symbol):
             reason = f"Downtrend: Wait for pullback to {ema9:.2f}"
             if curr_price >= ema9: reason = "SELL SIGNAL (Trend Pullback)"
     else:
-        if curr_rsi >= 30 and curr_rsi <= 70:
+        if curr_rsi >= 35 and curr_rsi <= 65:
             reason = f"RSI Neutral ({curr_rsi:.1f})"
         elif curr_price > bb_low and curr_price < bb_up:
             reason = "Price inside BB bands"
@@ -212,7 +212,7 @@ def hybrid_adx_bollinger(df, symbol):
         # BUY LOGIC
         if curr_price <= bb_low or curr_rsi < 28 or (is_overstretched and curr_price < ema9):
             # The "Hook": Wait for price to show a tiny bit of recovery or RSI to turn
-            if candle_body>curr_atr and curr_price > prev_price:
+            if candle_body>=curr_atr and curr_price > prev_price:
                 reason = "REVERSAL BUY: RSI/BB Extreme + Hook"
                 logger.info(f"[SIGNAL] {reason} | Price: {curr_price:.2f} | IS_OVERSTRETCHED: {is_overstretched}")
                 # TP is the Middle Band (Reversion to mean)
@@ -220,7 +220,7 @@ def hybrid_adx_bollinger(df, symbol):
         
         # SELL LOGIC
         elif curr_price >= bb_up or curr_rsi > 72 or (is_overstretched and curr_price > ema9):
-            if candle_body>curr_atr and curr_price < prev_price:
+            if candle_body>=curr_atr and curr_price < prev_price:
                 reason = "REVERSAL SELL: RSI/BB Extreme + Hook"
                 logger.info(f"[SIGNAL] {reason} | Price: {curr_price:.2f}|IS_OVERSTRETCHED: {is_overstretched}")
                 return execute_scalp(symbol, "SELL", 0.45, curr_price, curr_price + (curr_atr * 2), bb_mid)       
