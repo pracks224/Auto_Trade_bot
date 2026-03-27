@@ -27,9 +27,10 @@ TIMEFRAME = mt5.TIMEFRAME_M1
 MAX_LOSS = 500
 CHECK_INTERVAL = 30  
 MAGIC_NUMBER = 123456
-MAGIC_NUMBER_TRENDING = 123456
+MAGIC_NUMBER_TRENDING = 666549
 last_max_loss_time = 0
 COOLDOWN_PERIOD = 900
+last_trade_candle_time = None
 
 # Connect MT5
 if not mt5.initialize():
@@ -104,6 +105,7 @@ def calculate_adx_robust(df, window=14):
     
     return df['adx'].iloc[-1]
 def hybrid_adx_bollinger(df, symbol):
+    global last_trade_candle_time # 1. Declare it FIRST
     # EMAs
     df['ema9'] = df['close'].ewm(span=9, adjust=False).mean()
     df['ema30'] = df['close'].ewm(span=30, adjust=False).mean()
@@ -161,7 +163,7 @@ def hybrid_adx_bollinger(df, symbol):
     # We check if a Trend Position is already open before looking for new ones
 
     open_trend_pos = mt5.positions_get(symbol=symbol, magic=MAGIC_NUMBER_TRENDING)
-
+    logger.info(f"Filtered Trend Count (Magic {MAGIC_NUMBER_TRENDING}): {len(open_trend_pos)}")
     if open_trend_pos:
         pos = open_trend_pos[0] # You mentioned you only have one trend position
         current_sl = pos.sl
@@ -195,15 +197,12 @@ def hybrid_adx_bollinger(df, symbol):
             reason = "WEAKNESS: ADX Low" if adx_weak else "WEAKNESS: EMA9 Break"
             logger.info(f"[EXIT] Closing Trend Position | {reason} | ADX: {curr_adx:.1f}")
             mt5.Close(symbol, ticket=pos.ticket)
-            
-            # LOCK THE GATE: Don't jump back in on this same candle
-            global last_trade_candle_time
             last_trade_candle_time = current_candle_time
-            return None # Exit function, we are done for this tick
+        logger.info(f"Position active. Skipping entry logic for this tick.")
+        return None # Exit function, we are done for this tick
 
     # --- 2. ENTRY LOGIC GATE ---
-    # Only proceed to Entry Logic if we haven't traded this candle yet
-    global last_trade_candle_time
+
     if current_candle_time == last_trade_candle_time:
         return None
     
@@ -233,13 +232,13 @@ def hybrid_adx_bollinger(df, symbol):
             reason = f"Downtrend: Wait for pullback to {ema9:.2f}"
             if curr_price >= ema9: reason = "SELL SIGNAL (Trend Pullback)"
     else:
-        if curr_rsi >= 35 and curr_rsi <= 65:
+        if curr_rsi >= 40 and curr_rsi <= 60:
             reason = f"RSI Neutral ({curr_rsi:.1f})"
         elif curr_price > bb_low and curr_price < bb_up:
             reason = "Price inside BB bands"
-        elif curr_price <= bb_low and curr_rsi < 30:
+        elif curr_price <= bb_low and curr_rsi < 35:
             reason = "BUY SIGNAL (Range Bottom)"
-        elif curr_price >= bb_up and curr_rsi > 70:
+        elif curr_price >= bb_up and curr_rsi > 65:
             reason = "SELL SIGNAL (Range Top)"
 
     logger.info(f"[{mode}] CANDLE: {candle_body:.2f} | ADX: {curr_adx:.1f} | EXPAND: {is_expanded} | GAP_WIDE: {gap_widening} | {reason}")
@@ -260,23 +259,52 @@ def hybrid_adx_bollinger(df, symbol):
             return execute_scalp(symbol, "SELL", 0.32, curr_price, sl, tp,MAGIC_NUMBER_TRENDING)
 
     elif mode == "RANGE":
-        # BUY LOGIC
-        if curr_price <= bb_low and curr_rsi < 30 or (is_overstretched and curr_price < ema9):
-            # The "Hook": Wait for price to show a tiny bit of recovery or RSI to turn
-            if curr_price > prev_price and candle_body >= (curr_atr * 0.5):
+        # 1. SETUP PARAMETERS
+        proximity_buffer = 0.20  # Zone near the bands
+        buffer = 0.30            # Zone near the ceiling
+        symbol_info = mt5.symbol_info(symbol)
+        digits = symbol_info.digits if symbol_info else 2
+
+        # 2. PROXIMITY CHECKS
+        is_near_bb_low = curr_price <= (bb_low + proximity_buffer)
+        is_near_bb_up = curr_price >= (bb_up - buffer)
+        is_turning_up = curr_price > prev_price
+        is_turning_down = curr_price < prev_price
+
+        # --- BUY LOGIC ---
+        if (is_near_bb_low and is_turning_up and curr_rsi < 45) or (is_overstretched and curr_price < ema9):
+            if is_turning_up or candle_body >= (curr_atr * 0.5):
                 reason = "REVERSAL BUY: RSI/BB Extreme + Hook"
-                logger.info(f"[SIGNAL] {reason} | Price: {curr_price:.2f} | IS_OVERSTRETCHED: {is_overstretched}")
-                # TP is the Middle Band (Reversion to mean)
-                last_trade_candle_time = current_candle_time # Lock Gate
-                return execute_scalp(symbol, "BUY", 0.45, curr_price, bb_low - (curr_atr), bb_mid)
-        
-        # SELL LOGIC
-        elif curr_price >= bb_up and curr_rsi > 70 or (is_overstretched and curr_price > ema9):
-            if curr_price < prev_price and candle_body >= (curr_atr * 0.5):
+                
+                # SAFE SL CALCULATION: Stop below the band or ATR low
+                # Rounding to 2 digits is critical for XAUUSD
+                sl_price = round(min(bb_low, curr_price) - (curr_atr * 1.2), digits)
+                tp_price = round(bb_mid, digits)
+
+                # EMERGENCY CHECK: If SL is too close, push it back
+                if abs(curr_price - sl_price) < 0.3:
+                    sl_price = round(curr_price - 0.5, digits)
+
+                logger.info(f"[SIGNAL] {reason} | Price: {curr_price:.2f} | SL: {sl_price}")
+                last_trade_candle_time = current_candle_time
+                return execute_scalp(symbol, "BUY", 0.45, curr_price, sl_price, tp_price, MAGIC_NUMBER_RANGE)
+
+        # --- SELL LOGIC ---
+        elif (is_near_bb_up and is_turning_down and curr_rsi > 60) or (is_overstretched and curr_price > ema9):
+            if is_turning_down or candle_body >= (curr_atr * 0.5):
                 reason = "REVERSAL SELL: RSI/BB Extreme + Hook"
-                logger.info(f"[SIGNAL] {reason} | Price: {curr_price:.2f}|IS_OVERSTRETCHED: {is_overstretched}")
-                last_trade_candle_time = current_candle_time # Lock Gate
-                return execute_scalp(symbol, "SELL", 0.45, curr_price, bb_up + (curr_atr), bb_mid)       
+                
+                # SAFE SL CALCULATION: Stop above the band or ATR high
+                sl_price = round(max(bb_up, curr_price) + (curr_atr * 1.2), digits)
+                tp_price = round(bb_mid, digits)
+
+                # EMERGENCY CHECK: If SL is too close, push it back
+                if abs(curr_price - sl_price) < 0.3:
+                    sl_price = round(curr_price + 0.5, digits)
+
+                logger.info(f"[SIGNAL] {reason} | Price: {curr_price:.2f} | SL: {sl_price}")
+                last_trade_candle_time = current_candle_time
+                return execute_scalp(symbol, "SELL", 0.45, curr_price, sl_price, tp_price, MAGIC_NUMBER_RANGE)       
     return None
 
 def rsquar_startergy(df,symbol):
