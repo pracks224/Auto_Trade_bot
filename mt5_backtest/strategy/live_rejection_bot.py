@@ -164,6 +164,22 @@ def hybrid_adx_bollinger(df, symbol):
 
     if open_trend_pos:
         pos = open_trend_pos[0] # You mentioned you only have one trend position
+        current_sl = pos.sl
+        trail_buffer = 0.3 # Small buffer to avoid 'noise'
+        if pos.type == mt5.POSITION_TYPE_SELL:
+            # New SL is the EMA9 plus our buffer
+            suggested_sl = ema9 + trail_buffer    
+            # Only modify if the new SL is LOWER than the current one (Locking profit)
+            if suggested_sl < current_sl or current_sl == 0:
+                modify_sl(pos.ticket, suggested_sl)
+
+        elif pos.type == mt5.POSITION_TYPE_BUY:
+            # New SL is the EMA9 minus our buffer
+            suggested_sl = ema9 - trail_buffer
+            
+            # Only modify if the new SL is HIGHER than the current one
+            if suggested_sl > current_sl or current_sl == 0:
+                modify_sl(pos.ticket, suggested_sl)
         
         # WEAKNESS LOGIC
         # 1. ADX Drop: Trend is turning into a Range
