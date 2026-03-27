@@ -163,11 +163,12 @@ def hybrid_adx_bollinger(df, symbol):
 
     # Booleans for logic
     is_expanded  = df['bb_width'].iloc[-1] > (df['bb_width_avg'].iloc[-1] * 1.2)
-    is_trending  = curr_adx > 25
+    is_trending  = curr_adx > 21
     gap_widening = ema_gap > prev_ema_gap
     stretch = abs(curr_price - ema9)
     # Use 3x ATR as the "Extreme" marker for Gold
     is_overstretched = stretch > (curr_atr * 2.0)
+    candle_body = abs(last['close'] - last['open'])
 
     # --- 3. REASONING & LOGGING ---
     mode = "TREND" if (is_expanded and is_trending) else "RANGE"
@@ -177,7 +178,7 @@ def hybrid_adx_bollinger(df, symbol):
         if not gap_widening:
             reason = f"Gap not widening ({ema_gap:.2f} <= {prev_ema_gap:.2f})"
         elif ema9 > ema200:
-            reason = f"Uptrend: Wait for pullback to {ema9:.2f}"
+            reason = f"Uptrend: No pullback Yet {ema9:.2f}"
             if curr_price <= ema9: reason = "BUY SIGNAL (Trend Pullback)"
         else:
             reason = f"Downtrend: Wait for pullback to {ema9:.2f}"
@@ -197,32 +198,32 @@ def hybrid_adx_bollinger(df, symbol):
     # --- 4. EXECUTION LOGIC ---
     if mode == "TREND" and gap_widening:
         # Uptrend
-        if ema9 > ema200 and curr_price <= ema9:
-            sl = ema30
+        if ema9 > ema200 :
+            sl = ema9
             tp = curr_price + (curr_atr * 1.5)
-            return execute_scalp(symbol, "BUY", 0.3, curr_price, sl, tp)
+            return execute_scalp(symbol, "BUY", 0.32, curr_price, sl, tp)
         # Downtrend
-        elif ema9 < ema200 and curr_price >= ema9:
-            sl = ema30
+        elif ema9 < ema200 :
+            sl = ema9
             tp = curr_price - (curr_atr * 1.5)
-            return execute_scalp(symbol, "SELL", 0.3, curr_price, sl, tp)
+            return execute_scalp(symbol, "SELL", 0.32, curr_price, sl, tp)
 
     elif mode == "RANGE":
         # BUY LOGIC
         if curr_price <= bb_low or curr_rsi < 28 or (is_overstretched and curr_price < ema9):
             # The "Hook": Wait for price to show a tiny bit of recovery or RSI to turn
-            if curr_price > prev_price or curr_rsi > df['rsi'].iloc[-2]:
+            if candle_body>curr_atr and curr_price > prev_price or curr_rsi > df['rsi'].iloc[-2]:
                 reason = "REVERSAL BUY: RSI/BB Extreme + Hook"
                 logger.info(f"[SIGNAL] {reason} | Price: {curr_price:.2f}")
                 # TP is the Middle Band (Reversion to mean)
-                return execute_scalp(symbol, "BUY", 0.5, curr_price, curr_price - (curr_atr * 2), bb_mid)
+                return execute_scalp(symbol, "BUY", 0.45, curr_price, curr_price - (curr_atr * 2), bb_mid)
         
         # SELL LOGIC
         elif curr_price >= bb_up or curr_rsi > 72 or (is_overstretched and curr_price > ema9):
-            if curr_price < prev_price or curr_rsi < df['rsi'].iloc[-2]:
+            if candle_body>curr_atr and curr_price < prev_price or curr_rsi < df['rsi'].iloc[-2]:
                 reason = "REVERSAL SELL: RSI/BB Extreme + Hook"
                 logger.info(f"[SIGNAL] {reason} | Price: {curr_price:.2f}")
-                return execute_scalp(symbol, "SELL", 0.5, curr_price, curr_price + (curr_atr * 2), bb_mid)       
+                return execute_scalp(symbol, "SELL", 0.45, curr_price, curr_price + (curr_atr * 2), bb_mid)       
     return None
 
 def rsquar_startergy(df,symbol):
