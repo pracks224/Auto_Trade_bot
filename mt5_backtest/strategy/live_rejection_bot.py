@@ -241,7 +241,7 @@ def hybrid_adx_bollinger(df, symbol):
         elif curr_price >= bb_up and curr_rsi > 65:
             reason = "SELL SIGNAL (Range Top)"
 
-    logger.info(f"[{mode}] CANDLE: {candle_body:.2f} | ADX: {curr_adx:.1f} | EXPAND: {is_expanded} | GAP_WIDE: {gap_widening} | {reason}")
+    logger.info(f"[{mode}] ADX: {curr_adx:.1f} | Price: {curr_price:.2f} | BB_UP: {bb_up:.2f} | BB_LOW: {bb_low:.2f} | {reason}")
  
     # --- 4. EXECUTION LOGIC ---
     if mode == "TREND" and gap_widening:
