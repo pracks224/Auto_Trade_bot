@@ -25,7 +25,7 @@ logger = get_logger()
 SYMBOLS = ["XAUUSD_"]  # Ensure this matches your broker's suffix
 TIMEFRAME = mt5.TIMEFRAME_M1
 MAX_LOSS = 500
-CHECK_INTERVAL = 60  
+CHECK_INTERVAL = 30  
 MAGIC_NUMBER = 123456
 last_max_loss_time = 0
 COOLDOWN_PERIOD = 900
@@ -193,7 +193,7 @@ def hybrid_adx_bollinger(df, symbol):
         elif curr_price >= bb_up and curr_rsi > 70:
             reason = "SELL SIGNAL (Range Top)"
 
-    logger.info(f"[{mode}] Price: {curr_price:.2f} | ADX: {curr_adx:.1f} | EXPAND: {is_expanded} | GAP_WIDE: {gap_widening} | {reason}")
+    logger.info(f"[{mode}] CANDLE: {candle_body:.2f} | ADX: {curr_adx:.1f} | EXPAND: {is_expanded} | GAP_WIDE: {gap_widening} | {reason}")
 
     # --- 4. EXECUTION LOGIC ---
     if mode == "TREND" and gap_widening:
