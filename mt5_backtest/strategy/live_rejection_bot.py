@@ -29,7 +29,7 @@ CHECK_INTERVAL = 30
 MAGIC_NUMBER = 123456
 MAGIC_NUMBER_TRENDING = 666549
 last_max_loss_time = 0
-COOLDOWN_PERIOD = 900
+COOLDOWN_PERIOD = 300
 last_trade_candle_time = None
 
 # Connect MT5
@@ -242,21 +242,51 @@ def hybrid_adx_bollinger(df, symbol):
             reason = "SELL SIGNAL (Range Top)"
 
     logger.info(f"[{mode}] ADX: {curr_adx:.1f} | Price: {curr_price:.2f} | BB_UP: {bb_up:.2f} | BB_LOW: {bb_low:.2f} | {reason}")
- 
-    # --- 4. EXECUTION LOGIC ---
-    if mode == "TREND" and gap_widening:
-        # Uptrend
-        if ema9 > ema200 :
-            sl = ema9
-            tp = curr_price + (curr_atr * 15)
-            last_trade_candle_time = current_candle_time # Lock Gate
-            return execute_scalp(symbol, "BUY", 0.32, curr_price, sl, tp,MAGIC_NUMBER_TRENDING)
-        # Downtrend
-        elif ema9 < ema200 :
-            sl = ema9
-            tp = curr_price - (curr_atr * 15)
-            last_trade_candle_time = current_candle_time # Lock Gate
-            return execute_scalp(symbol, "SELL", 0.32, curr_price, sl, tp,MAGIC_NUMBER_TRENDING)
+
+# --- Outside the loop or in a persistent state object ---
+pending_signal = None  # Stores "BUY" or "SELL"
+confirmation_price = 0.0
+# Ensure COOLDOWN_PERIOD is set to 300 (5 minutes)
+
+# --- Inside 4. EXECUTION LOGIC ---
+isAnyCoolDown = time.time() - last_max_loss_time > COOLDOWN_PERIOD
+
+if isAnyCoolDown and mode == "TREND" and gap_widening:
+    
+    # 1. SIGNAL PHASE (Identify the setup)
+    if ema9 > ema200 and pending_signal is None:
+        # Instead of buying, we set a target: Previous Candle High
+        # rates[1] is the last completed 1m candle
+        pending_signal = "BUY"
+        confirmation_price = curr_price + 0.10 # 10 cent buffer for Gold
+        logger.info(f"BUY Signal Armed. Waiting for price > {confirmation_price}")
+
+    elif ema9 < ema200 and pending_signal is None:
+        # Set target: Previous Candle Low
+        pending_signal = "SELL"
+        confirmation_price = curr_price - 0.10
+        logger.info(f"SELL Signal Armed. Waiting for price < {confirmation_price}")
+
+    # 2. TRIGGER PHASE (Wait for price action to confirm)
+    if pending_signal == "BUY" and curr_price > confirmation_price:
+        sl = curr_price - (curr_atr * 1.25)
+        tp = curr_price + (curr_atr * 1.5)
+        last_max_loss_time = time.time() # Start 5-min cooldown
+        pending_signal = None # Reset
+        return execute_scalp(symbol, "BUY", 1.02, curr_price, sl, tp, MAGIC_NUMBER_TRENDING)
+
+    elif pending_signal == "SELL" and curr_price < confirmation_price:
+        sl = curr_price + (curr_atr * 1.25)
+        tp = curr_price - (curr_atr * 1.5)
+        last_max_loss_time = time.time() # Start 5-min cooldown
+        pending_signal = None # Reset
+        return execute_scalp(symbol, "SELL", 1.02, curr_price, sl, tp, MAGIC_NUMBER_TRENDING)
+
+    # 3. INVALIDATION (Optional)
+    # If the price moves too far away from the EMA9, cancel the pending signal
+    if pending_signal and abs(curr_price - ema9) > (curr_atr * 5):
+        logger.info("Signal invalidated: Price moved too far from EMA9")
+        pending_signal = None
 
     elif mode == "RANGE":
         # --- THE DIAGNOSTIC LOGGER ---
@@ -280,14 +310,14 @@ def hybrid_adx_bollinger(df, symbol):
         if is_in_buy_zone and is_turning_up and curr_rsi < 45:
             # This would have triggered at 19:05:24 because 0.81 < 0.85
             reason = "RANGE BUY: Hook confirmed in Zone"
-            last_trade_candle_time = current_candle_time
-            return execute_scalp(symbol, "BUY", 0.45, curr_price, bb_low - (curr_atr), bb_mid, MAGIC_NUMBER_RANGE)
+            #last_max_loss_time = time.time()
+            return execute_scalp(symbol, "BUY", 0.65, curr_price, bb_low - (curr_atr), bb_mid, MAGIC_NUMBER_RANGE)
 
         # SELL LOGIC
         elif is_in_sell_zone and is_turning_down and curr_rsi > 65:
             reason = "RANGE SELL: Hook confirmed in Zone"
-            last_trade_candle_time = current_candle_time
-            return execute_scalp(symbol, "SELL", 0.45, curr_price, bb_up + (curr_atr), bb_mid, MAGIC_NUMBER_RANGE)     
+            #last_max_loss_time = time.time()
+            return execute_scalp(symbol, "SELL", 0.65, curr_price, bb_up + (curr_atr), bb_mid, MAGIC_NUMBER_RANGE)     
     return None
 
 def rsquar_startergy(df,symbol):
