@@ -106,6 +106,7 @@ def calculate_adx_robust(df, window=14):
     return df['adx'].iloc[-1]
 def hybrid_adx_bollinger(df, symbol):
     global last_trade_candle_time # 1. Declare it FIRST
+    global last_max_loss_time  # <--- ADD THIS LINE
     # EMAs
     df['ema9'] = df['close'].ewm(span=9, adjust=False).mean()
     df['ema30'] = df['close'].ewm(span=30, adjust=False).mean()
@@ -163,7 +164,7 @@ def hybrid_adx_bollinger(df, symbol):
     # We check if a Trend Position is already open before looking for new ones
 
     open_trend_pos = mt5.positions_get(symbol=symbol, magic=MAGIC_NUMBER_TRENDING)
-    logger.info(f"Filtered Trend Count (Magic {MAGIC_NUMBER_TRENDING}): {len(open_trend_pos)}")
+    #logger.info(f"Filtered Trend Count (Magic {MAGIC_NUMBER_TRENDING}): {len(open_trend_pos)}")
     if open_trend_pos:
         pos = open_trend_pos[0] # You mentioned you only have one trend position
         current_sl = pos.sl
@@ -243,50 +244,50 @@ def hybrid_adx_bollinger(df, symbol):
 
     logger.info(f"[{mode}] ADX: {curr_adx:.1f} | Price: {curr_price:.2f} | BB_UP: {bb_up:.2f} | BB_LOW: {bb_low:.2f} | {reason}")
 
-# --- Outside the loop or in a persistent state object ---
-pending_signal = None  # Stores "BUY" or "SELL"
-confirmation_price = 0.0
-# Ensure COOLDOWN_PERIOD is set to 300 (5 minutes)
+    # --- Outside the loop or in a persistent state object ---
+    pending_signal = None  # Stores "BUY" or "SELL"
+    confirmation_price = 0.0
+    # Ensure COOLDOWN_PERIOD is set to 300 (5 minutes)
 
-# --- Inside 4. EXECUTION LOGIC ---
-isAnyCoolDown = time.time() - last_max_loss_time > COOLDOWN_PERIOD
+    # --- Inside 4. EXECUTION LOGIC ---
+    isAnyCoolDown = time.time() - last_max_loss_time > COOLDOWN_PERIOD
 
-if isAnyCoolDown and mode == "TREND" and gap_widening:
+    if isAnyCoolDown and mode == "TREND" and gap_widening:
     
-    # 1. SIGNAL PHASE (Identify the setup)
-    if ema9 > ema200 and pending_signal is None:
-        # Instead of buying, we set a target: Previous Candle High
-        # rates[1] is the last completed 1m candle
-        pending_signal = "BUY"
-        confirmation_price = curr_price + 0.10 # 10 cent buffer for Gold
-        logger.info(f"BUY Signal Armed. Waiting for price > {confirmation_price}")
+        # 1. SIGNAL PHASE (Identify the setup)
+        if ema9 > ema200 and pending_signal is None:
+            # Instead of buying, we set a target: Previous Candle High
+            # rates[1] is the last completed 1m candle
+            pending_signal = "BUY"
+            confirmation_price = curr_price + 0.10 # 10 cent buffer for Gold
+            logger.info(f"BUY Signal Armed. Waiting for price > {confirmation_price}")
 
-    elif ema9 < ema200 and pending_signal is None:
-        # Set target: Previous Candle Low
-        pending_signal = "SELL"
-        confirmation_price = curr_price - 0.10
-        logger.info(f"SELL Signal Armed. Waiting for price < {confirmation_price}")
+        elif ema9 < ema200 and pending_signal is None:
+            # Set target: Previous Candle Low
+            pending_signal = "SELL"
+            confirmation_price = curr_price - 0.10
+            logger.info(f"SELL Signal Armed. Waiting for price < {confirmation_price}")
 
-    # 2. TRIGGER PHASE (Wait for price action to confirm)
-    if pending_signal == "BUY" and curr_price > confirmation_price:
-        sl = curr_price - (curr_atr * 1.25)
-        tp = curr_price + (curr_atr * 1.5)
-        last_max_loss_time = time.time() # Start 5-min cooldown
-        pending_signal = None # Reset
-        return execute_scalp(symbol, "BUY", 1.02, curr_price, sl, tp, MAGIC_NUMBER_TRENDING)
+        # 2. TRIGGER PHASE (Wait for price action to confirm)
+        if pending_signal == "BUY" and curr_price > confirmation_price:
+            sl = curr_price - (curr_atr * 1.25)
+            tp = curr_price + (curr_atr * 1.5)
+            last_max_loss_time = time.time() # Start 5-min cooldown
+            pending_signal = None # Reset
+            return execute_scalp(symbol, "BUY", 1.02, curr_price, sl, tp, MAGIC_NUMBER_TRENDING)
 
-    elif pending_signal == "SELL" and curr_price < confirmation_price:
-        sl = curr_price + (curr_atr * 1.25)
-        tp = curr_price - (curr_atr * 1.5)
-        last_max_loss_time = time.time() # Start 5-min cooldown
-        pending_signal = None # Reset
-        return execute_scalp(symbol, "SELL", 1.02, curr_price, sl, tp, MAGIC_NUMBER_TRENDING)
+        elif pending_signal == "SELL" and curr_price < confirmation_price:
+            sl = curr_price + (curr_atr * 1.25)
+            tp = curr_price - (curr_atr * 1.5)
+            last_max_loss_time = time.time() # Start 5-min cooldown
+            pending_signal = None # Reset
+            return execute_scalp(symbol, "SELL", 1.02, curr_price, sl, tp, MAGIC_NUMBER_TRENDING)
 
-    # 3. INVALIDATION (Optional)
-    # If the price moves too far away from the EMA9, cancel the pending signal
-    if pending_signal and abs(curr_price - ema9) > (curr_atr * 5):
-        logger.info("Signal invalidated: Price moved too far from EMA9")
-        pending_signal = None
+        # 3. INVALIDATION (Optional)
+        # If the price moves too far away from the EMA9, cancel the pending signal
+        if pending_signal and abs(curr_price - ema9) > (curr_atr * 5):
+            logger.info("Signal invalidated: Price moved too far from EMA9")
+            pending_signal = None
 
     elif mode == "RANGE":
         # --- THE DIAGNOSTIC LOGGER ---
@@ -706,6 +707,7 @@ while True:
 
             # 1. PnL Monitor
             pnl = get_total_floating_pnl(sym)
+            '''
             logger.info(
                 f"[{sym}] Price: {last['close']:.2f} | "
                 f"RSI: {last['rsi']:.1f} | "
@@ -713,6 +715,7 @@ while True:
                 f"EMA9/200: {last['ema9']:.1f}/{last['ema200']:.1f} | "
                 f"PnL: ${pnl:.2f}"
             )
+            '''
 
             if pnl <= -MAX_LOSS:
                 logger.error(f"!!! MAX LOSS HIT (${pnl:.2f}) !!! Closing all.")
@@ -721,7 +724,7 @@ while True:
                 continue
             # At the start of your Entry Logic:
             if time.time() - last_max_loss_time < COOLDOWN_PERIOD:
-                # Optional: logger.info("In Max Loss Cooldown... waiting.")
+                logger.info("In Max Loss Cooldown... waiting.")
                 continue
             hybrid_adx_bollinger(df,sym)
     except Exception as e:
