@@ -29,7 +29,7 @@ CHECK_INTERVAL = 30
 MAGIC_NUMBER = 123456
 MAGIC_NUMBER_TRENDING = 666549
 last_max_loss_time = 0
-COOLDOWN_PERIOD = 300
+COOLDOWN_PERIOD = 180
 last_trade_candle_time = None
 active_trade_regime = None
 buy_zone_armed = None
@@ -694,7 +694,7 @@ while True:
                 continue
             # At the start of your Entry Logic:
             if time.time() - last_max_loss_time < COOLDOWN_PERIOD:
-                logger.info("In Max Loss Cooldown... waiting.")
+                logger.info("Cooldown After WIN or LOSS... waiting.")
                 continue
             hybrid_adx_bollinger(df,sym)
     except Exception as e:
