@@ -31,6 +31,7 @@ MAGIC_NUMBER_TRENDING = 666549
 last_max_loss_time = 0
 COOLDOWN_PERIOD = 300
 last_trade_candle_time = None
+active_trade_regime = None
 
 # Connect MT5
 if not mt5.initialize():
@@ -105,8 +106,9 @@ def calculate_adx_robust(df, window=14):
     
     return df['adx'].iloc[-1]
 def hybrid_adx_bollinger(df, symbol):
-    global last_trade_candle_time # 1. Declare it FIRST
-    global last_max_loss_time  # <--- ADD THIS LINE
+    global last_trade_candle_time
+    global last_max_loss_time
+    global active_trade_regime
     # EMAs
     df['ema9'] = df['close'].ewm(span=9, adjust=False).mean()
     df['ema30'] = df['close'].ewm(span=30, adjust=False).mean()
@@ -158,7 +160,7 @@ def hybrid_adx_bollinger(df, symbol):
     bb_up      = df['bb_upper'].iloc[-1]
     bb_low     = df['bb_lower'].iloc[-1]
     bb_mid     = df['bb_mid'].iloc[-1]
-
+   
     current_candle_time = df.index[-1]
     # --- NEW SECTION: TREND WEAKNESS & MANAGEMENT ---
     # We check if a Trend Position is already open before looking for new ones
@@ -194,7 +196,7 @@ def hybrid_adx_bollinger(df, symbol):
         else:
             structure_break = curr_price < (ema9 - 0.3)
             
-        if adx_weak or structure_break:
+        if active_trade_regime = "TREND" and adx_weak or structure_break:
             reason = "WEAKNESS: ADX Low" if adx_weak else "WEAKNESS: EMA9 Break"
             logger.info(f"[EXIT] Closing Trend Position | {reason} | ADX: {curr_adx:.1f}")
             mt5.Close(symbol, ticket=pos.ticket)
@@ -222,7 +224,7 @@ def hybrid_adx_bollinger(df, symbol):
     # --- 3. REASONING & LOGGING ---
     mode = "TREND" if (is_expanded and is_trending) else "RANGE"
     reason = "No setup"
-
+    active_trade_regime = mode
     if mode == "TREND":
         if not gap_widening:
             reason = f"Gap not widening ({ema_gap:.2f} <= {prev_ema_gap:.2f})"
@@ -321,39 +323,7 @@ def hybrid_adx_bollinger(df, symbol):
             return execute_scalp(symbol, "SELL", 0.35, curr_price, bb_up + (curr_atr), bb_mid, MAGIC_NUMBER)     
     return None
 
-def rsquar_startergy(df,symbol):
-    slope, r_sq = calculate_regime(df)
-    atr = df['atr'].iloc[-1]
-    curr_price = df['close'].iloc[-1]
-    min_slope_threshold = 0.15
 
-    # --- REGIME A: TRENDING (High R-squared) ---
-    if r_sq > 0.65 and abs(slope) > min_slope_threshold:
-        # UPTREND PULLBACK
-        if slope > 0 and curr_price <= df['ema9'].iloc[-1]:
-            sl = curr_price - (2.0 * atr) # Trend needs 2x ATR room
-            tp = curr_price + (1.5 * atr)
-            return execute_scalp(symbol, "BUY", 0.5, curr_price, sl, tp)
-            
-        # DOWNTREND PULLBACK
-        elif slope < 0 and curr_price >= df['ema9'].iloc[-1]:
-            sl = curr_price + (2.0 * atr)
-            tp = curr_price - (1.5 * atr)
-            return execute_scalp(symbol, "SELL", 0.5, curr_price, sl, tp)
-
-    # --- REGIME B: RANGE BOUND (Low R-squared) ---
-    elif r_sq < 0.35:
-        # SELL THE TOP (Rubber Band)
-        if df['rsi'].iloc[-1] > 70:
-            sl = curr_price + (1.2 * atr) # Range needs tight 1.2x ATR
-            tp = curr_price - (1.0 * atr) # Quick 1:1 exit
-            return execute_scalp(symbol, "SELL", 0.5, curr_price, sl, tp)
-            
-        # BUY THE BOTTOM (Rubber Band)
-        elif df['rsi'].iloc[-1] < 30:
-            sl = curr_price - (1.2 * atr)
-            tp = curr_price + (1.0 * atr)
-            return execute_scalp(symbol, "BUY", 0.5, curr_price, sl, tp)
 
 def get_total_floating_pnl(symbol):
     """Reads live PnL directly from MT5 terminal with safety defaults."""
