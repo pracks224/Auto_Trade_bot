@@ -32,6 +32,8 @@ last_max_loss_time = 0
 COOLDOWN_PERIOD = 300
 last_trade_candle_time = None
 active_trade_regime = None
+buy_zone_armed = None
+sell_zone_armed = None
 
 # Connect MT5
 if not mt5.initialize():
@@ -109,6 +111,8 @@ def hybrid_adx_bollinger(df, symbol):
     global last_trade_candle_time
     global last_max_loss_time
     global active_trade_regime
+    global buy_zone_armed
+    global sell_zone_armed
     # EMAs
     df['ema9'] = df['close'].ewm(span=9, adjust=False).mean()
     df['ema30'] = df['close'].ewm(span=30, adjust=False).mean()
@@ -196,7 +200,7 @@ def hybrid_adx_bollinger(df, symbol):
         else:
             structure_break = curr_price < (ema9 - 0.3)
             
-        if active_trade_regime = "TREND" and adx_weak or structure_break:
+        if active_trade_regime == "TREND" and adx_weak or structure_break:
             reason = "WEAKNESS: ADX Low" if adx_weak else "WEAKNESS: EMA9 Break"
             logger.info(f"[EXIT] Closing Trend Position | {reason} | ADX: {curr_adx:.1f}")
             mt5.Close(symbol, ticket=pos.ticket)
@@ -299,16 +303,21 @@ def hybrid_adx_bollinger(df, symbol):
         logger.info(f"--- [RANGE CHECK] Price: {curr_price:.2f} | RSI: {curr_rsi:.1f} | "
                     f"Gap_Low: {dist_to_low:.2f} (Target: <{range_entry_buffer}) | "
                     f"Hook: {'UP' if is_turning_up else 'DOWN' if is_turning_down else 'FLAT'} ---")
+        if dist_to_low < 1.0: # Tight touch to the floor
+            buy_zone_armed = True
+            logger.info("BUY ZONE ARMED: Price hit floor. Waiting for break...")
 
+        if dist_to_up < 1.0: # Tight touch to the ceiling
+            sell_zone_armed = True
+            logger.info("SELL ZONE ARMED: Price hit ceiling. Waiting for break...")
         # BUY LOGIC
-        if is_in_buy_zone and is_turning_up and curr_rsi < 45:
-            # This would have triggered at 19:05:24 because 0.81 < 0.85
+        if buy_zone_armed and is_turning_up and curr_rsi < 45:
             reason = "RANGE BUY: Hook confirmed in Zone"
             last_max_loss_time = time.time()
             return execute_scalp(symbol, "BUY", 0.35, curr_price, bb_low - (curr_atr), bb_mid, MAGIC_NUMBER)
 
         # SELL LOGIC
-        elif is_in_sell_zone and is_turning_down and curr_rsi > 65:
+        elif sell_zone_armed and is_turning_down and curr_rsi > 65:
             reason = "RANGE SELL: Hook confirmed in Zone"
             last_max_loss_time = time.time()
             return execute_scalp(symbol, "SELL", 0.35, curr_price, bb_up + (curr_atr), bb_mid, MAGIC_NUMBER)     
