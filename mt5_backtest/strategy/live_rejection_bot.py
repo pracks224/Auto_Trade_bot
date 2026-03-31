@@ -314,12 +314,14 @@ def hybrid_adx_bollinger(df, symbol):
         if buy_zone_armed and is_turning_up and curr_rsi < 45:
             reason = "RANGE BUY: Hook confirmed in Zone"
             last_max_loss_time = time.time()
+            buy_zone_armed = False
             return execute_scalp(symbol, "BUY", 0.35, curr_price, bb_low - (curr_atr), bb_mid, MAGIC_NUMBER)
 
         # SELL LOGIC
         elif sell_zone_armed and is_turning_down and curr_rsi > 65:
             reason = "RANGE SELL: Hook confirmed in Zone"
             last_max_loss_time = time.time()
+            sell_zone_armed = False
             return execute_scalp(symbol, "SELL", 0.35, curr_price, bb_up + (curr_atr), bb_mid, MAGIC_NUMBER)     
     return None
 
