@@ -274,14 +274,14 @@ def hybrid_adx_bollinger(df, symbol):
             tp = curr_price + (curr_atr * 1.5)
             last_max_loss_time = time.time() # Start 5-min cooldown
             pending_signal = None # Reset
-            return execute_scalp(symbol, "BUY", 1.02, curr_price, sl, tp, MAGIC_NUMBER_TRENDING)
+            return execute_scalp(symbol, "BUY", 0.52, curr_price, sl, tp, MAGIC_NUMBER_TRENDING)
 
         elif pending_signal == "SELL" and curr_price < confirmation_price:
             sl = curr_price + (curr_atr * 1.25)
             tp = curr_price - (curr_atr * 1.5)
             last_max_loss_time = time.time() # Start 5-min cooldown
             pending_signal = None # Reset
-            return execute_scalp(symbol, "SELL", 1.02, curr_price, sl, tp, MAGIC_NUMBER_TRENDING)
+            return execute_scalp(symbol, "SELL", 0.52, curr_price, sl, tp, MAGIC_NUMBER_TRENDING)
 
         # 3. INVALIDATION (Optional)
         # If the price moves too far away from the EMA9, cancel the pending signal
@@ -311,14 +311,14 @@ def hybrid_adx_bollinger(df, symbol):
         if is_in_buy_zone and is_turning_up and curr_rsi < 45:
             # This would have triggered at 19:05:24 because 0.81 < 0.85
             reason = "RANGE BUY: Hook confirmed in Zone"
-            #last_max_loss_time = time.time()
-            return execute_scalp(symbol, "BUY", 0.65, curr_price, bb_low - (curr_atr), bb_mid, MAGIC_NUMBER_RANGE)
+            last_max_loss_time = time.time()
+            return execute_scalp(symbol, "BUY", 0.35, curr_price, bb_low - (curr_atr), bb_mid, MAGIC_NUMBER)
 
         # SELL LOGIC
         elif is_in_sell_zone and is_turning_down and curr_rsi > 65:
             reason = "RANGE SELL: Hook confirmed in Zone"
-            #last_max_loss_time = time.time()
-            return execute_scalp(symbol, "SELL", 0.65, curr_price, bb_up + (curr_atr), bb_mid, MAGIC_NUMBER_RANGE)     
+            last_max_loss_time = time.time()
+            return execute_scalp(symbol, "SELL", 0.35, curr_price, bb_up + (curr_atr), bb_mid, MAGIC_NUMBER)     
     return None
 
 def rsquar_startergy(df,symbol):
@@ -661,23 +661,17 @@ def execute_scalp(symbol, side, lot, price, sl, tp,magic=MAGIC_NUMBER):
         return False
 
 def is_trading_allowed():
-    """
-    Checks if current time is OUTSIDE the 11:30 PM - 3:00 AM window.
-    Explicitly uses Asia/Kuwait (UTC+3) time.
-    """
-    # 1. Force the timezone to Kuwait
     kwt_tz = pytz.timezone('Asia/Kuwait')
-    now_kwt = datetime.now(kwt_tz).time()
+    now_kwt = datetime.now(kwt_tz)
+    current_hour_min = now_kwt.hour * 100 + now_kwt.minute # e.g., 4:13 becomes 413
+   # logger.info(f"DEBUG: Current Kuwait Time is {now_kwt}")
+   # logger.info(f"DEBUG: Current  Hour Min Kuwait Time is {current_hour_min}")
+
+    # 2330 (11:30 PM) to 0300 (3:00 AM)
+    if current_hour_min >= 2330 or current_hour_min <= 300:
+        return False # Sleep
     
-    # 2. Define the No-Trade Zone
-    start_no_trade = datetime.strptime("23:30", "%H:%M").time()
-    end_no_trade = datetime.strptime("03:00", "%H:%M").time()
-    
-    # 3. Logic Check
-    if now_kwt >= start_no_trade or now_kwt <= end_no_trade:
-        return False # We are in the blackout zone
-        
-    return True # Trading is allowed
+    return True # Trade
 
 # --- GLOBAL THRESHOLDS ---
 TREND_GAP_MIN = 15.0       # $15 difference between EMA9 and EMA200
@@ -696,7 +690,13 @@ while True:
                 continue
             # 1. Request 500 candles (Solves the Warm-up/NaN issue)
             rates = mt5.copy_rates_from_pos(sym, mt5.TIMEFRAME_M1, 0, 500)
+            if rates is None or len(rates) == 0:
+                logger.error(f"MT5 ERROR: Could not fetch rates for {sym}. Check Symbol name!")
+                continue
             df = fetch_data(sym)
+            if df is None or df.empty:
+                logger.error(f"FETCH ERROR: Dataframe for {sym} is empty.")
+                continue
             if df.empty: continue
             
             df = calculate_indicators(df)
@@ -707,7 +707,7 @@ while True:
 
             # 1. PnL Monitor
             pnl = get_total_floating_pnl(sym)
-            '''
+        
             logger.info(
                 f"[{sym}] Price: {last['close']:.2f} | "
                 f"RSI: {last['rsi']:.1f} | "
@@ -715,7 +715,7 @@ while True:
                 f"EMA9/200: {last['ema9']:.1f}/{last['ema200']:.1f} | "
                 f"PnL: ${pnl:.2f}"
             )
-            '''
+        
 
             if pnl <= -MAX_LOSS:
                 logger.error(f"!!! MAX LOSS HIT (${pnl:.2f}) !!! Closing all.")
