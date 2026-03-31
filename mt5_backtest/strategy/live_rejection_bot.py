@@ -247,43 +247,34 @@ def hybrid_adx_bollinger(df, symbol):
     logger.info(f"[{mode}] ADX: {curr_adx:.1f} | Price: {curr_price:.2f} | BB_UP: {bb_up:.2f} | BB_LOW: {bb_low:.2f} | {reason}")
 
     # --- Outside the loop or in a persistent state object ---
-    pending_signal = None  # Stores "BUY" or "SELL"
-    confirmation_price = 0.0
-    # Ensure COOLDOWN_PERIOD is set to 300 (5 minutes)
+    last_5_candles = df.iloc[-6:-1]
+    
+    # Calculate the High and Low of that 5-minute window
+    five_min_high = last_5_candles['high'].max()
+    five_min_low = last_5_candles['low'].min()
+    
+    # 2. Setup the Trigger with a Buffer
+    trigger_buy = five_min_high + 0.10
+    trigger_sell = five_min_low - 0.10
 
     # --- Inside 4. EXECUTION LOGIC ---
     isAnyCoolDown = time.time() - last_max_loss_time > COOLDOWN_PERIOD
 
     if isAnyCoolDown and mode == "TREND" and gap_widening:
-    
-        # 1. SIGNAL PHASE (Identify the setup)
-        if ema9 > ema200 and pending_signal is None:
-            # Instead of buying, we set a target: Previous Candle High
-            # rates[1] is the last completed 1m candle
-            pending_signal = "BUY"
-            confirmation_price = curr_price + 0.10 # 10 cent buffer for Gold
-            logger.info(f"BUY Signal Armed. Waiting for price > {confirmation_price}")
-
-        elif ema9 < ema200 and pending_signal is None:
-            # Set target: Previous Candle Low
-            pending_signal = "SELL"
-            confirmation_price = curr_price - 0.10
-            logger.info(f"SELL Signal Armed. Waiting for price < {confirmation_price}")
-
         # 2. TRIGGER PHASE (Wait for price action to confirm)
-        if pending_signal == "BUY" and curr_price > confirmation_price:
-            sl = curr_price - (curr_atr * 1.25)
-            tp = curr_price + (curr_atr * 1.5)
+        if curr_price > trigger_buy:
+            sl_price = five_min_low - 0.05
+            tp = curr_price+2
             last_max_loss_time = time.time() # Start 5-min cooldown
-            pending_signal = None # Reset
-            return execute_scalp(symbol, "BUY", 0.52, curr_price, sl, tp, MAGIC_NUMBER_TRENDING)
+            logger.info(f"5-MIN BREAKOUT BUY: Price {curr_price} > High {five_min_high}")
+            return execute_scalp(symbol, "BUY", 0.57, curr_price, sl, tp, MAGIC_NUMBER_TRENDING)
 
-        elif pending_signal == "SELL" and curr_price < confirmation_price:
-            sl = curr_price + (curr_atr * 1.25)
-            tp = curr_price - (curr_atr * 1.5)
-            last_max_loss_time = time.time() # Start 5-min cooldown
-            pending_signal = None # Reset
-            return execute_scalp(symbol, "SELL", 0.52, curr_price, sl, tp, MAGIC_NUMBER_TRENDING)
+        elif curr_price < trigger_sell:
+            sl_price = five_min_high + 0.05
+            tp=curr_price-2
+            last_max_loss_time = time.time()
+            logger.info(f"5-MIN BREAKOUT SELL: Price {curr_price} < Low {five_min_low}")
+            return execute_scalp(symbol, "SELL", 0.57, curr_price, sl, tp, MAGIC_NUMBER_TRENDING)
 
         # 3. INVALIDATION (Optional)
         # If the price moves too far away from the EMA9, cancel the pending signal
@@ -296,7 +287,7 @@ def hybrid_adx_bollinger(df, symbol):
         dist_to_low = curr_price - bb_low
         dist_to_up = bb_up - curr_price
         # 1. SETUP PARAMETERS
-        range_entry_buffer = 0.85
+        range_entry_buffer = 1.5
         # 1. Check if price is within the 'Active Zone'
         is_in_buy_zone = curr_price <= (bb_low + range_entry_buffer)
         is_in_sell_zone = curr_price >= (bb_up - range_entry_buffer)
