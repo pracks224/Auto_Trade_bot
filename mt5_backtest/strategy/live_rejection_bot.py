@@ -28,6 +28,7 @@ MAX_LOSS = 500
 CHECK_INTERVAL = 30  
 MAGIC_NUMBER = 123456
 MAGIC_NUMBER_TRENDING = 666549
+last_trade_time = 0
 last_max_loss_time = 0
 COOLDOWN_PERIOD = 180
 last_trade_candle_time = None
@@ -109,7 +110,7 @@ def calculate_adx_robust(df, window=14):
     return df['adx'].iloc[-1]
 def hybrid_adx_bollinger(df, symbol):
     global last_trade_candle_time
-    global last_max_loss_time
+    global last_trade_time
     global active_trade_regime
     global buy_zone_armed
     global sell_zone_armed
@@ -224,7 +225,7 @@ def hybrid_adx_bollinger(df, symbol):
     # Use 3x ATR as the "Extreme" marker for Gold
     is_overstretched = stretch > (curr_atr * 2.0)
     candle_body = abs(last['close'] - last['open'])
-
+    logger.info(f"is_expanded {is_expanded} > is_trending {is_trending}")
     # --- 3. REASONING & LOGGING ---
     mode = "TREND" if (is_expanded and is_trending) else "RANGE"
     reason = "No setup"
@@ -262,29 +263,22 @@ def hybrid_adx_bollinger(df, symbol):
     trigger_sell = five_min_low - 0.10
 
     # --- Inside 4. EXECUTION LOGIC ---
-    isAnyCoolDown = time.time() - last_max_loss_time > COOLDOWN_PERIOD
-
-    if isAnyCoolDown and mode == "TREND" and gap_widening:
+    logger.info(f" GAP WIDENING {gap_widening} trigger_buy {trigger_buy} trigger_sell {trigger_sell} ")
+    if  mode == "TREND" and gap_widening:
         # 2. TRIGGER PHASE (Wait for price action to confirm)
         if curr_price > trigger_buy:
             sl_price = five_min_low - 0.05
             tp = curr_price+2
-            last_max_loss_time = time.time() # Start 5-min cooldown
+            last_trade_time = time.time() # Start 5-min cooldown
             logger.info(f"5-MIN BREAKOUT BUY: Price {curr_price} > High {five_min_high}")
-            return execute_scalp(symbol, "BUY", 0.57, curr_price, sl, tp, MAGIC_NUMBER_TRENDING)
+            return execute_scalp(symbol, "BUY", 0.57, curr_price, sl_price, tp, MAGIC_NUMBER_TRENDING)
 
         elif curr_price < trigger_sell:
             sl_price = five_min_high + 0.05
             tp=curr_price-2
-            last_max_loss_time = time.time()
+            last_trade_time = time.time()
             logger.info(f"5-MIN BREAKOUT SELL: Price {curr_price} < Low {five_min_low}")
-            return execute_scalp(symbol, "SELL", 0.57, curr_price, sl, tp, MAGIC_NUMBER_TRENDING)
-
-        # 3. INVALIDATION (Optional)
-        # If the price moves too far away from the EMA9, cancel the pending signal
-        if pending_signal and abs(curr_price - ema9) > (curr_atr * 5):
-            logger.info("Signal invalidated: Price moved too far from EMA9")
-            pending_signal = None
+            return execute_scalp(symbol, "SELL", 0.57, curr_price, sl_price, tp, MAGIC_NUMBER_TRENDING)
 
     elif mode == "RANGE":
         # --- THE DIAGNOSTIC LOGGER ---
@@ -313,14 +307,14 @@ def hybrid_adx_bollinger(df, symbol):
         # BUY LOGIC
         if buy_zone_armed and is_turning_up and curr_rsi < 45:
             reason = "RANGE BUY: Hook confirmed in Zone"
-            last_max_loss_time = time.time()
+            last_trade_time = time.time()
             buy_zone_armed = False
             return execute_scalp(symbol, "BUY", 0.35, curr_price, bb_low - (curr_atr), bb_mid, MAGIC_NUMBER)
 
         # SELL LOGIC
         elif sell_zone_armed and is_turning_down and curr_rsi > 65:
             reason = "RANGE SELL: Hook confirmed in Zone"
-            last_max_loss_time = time.time()
+            last_trade_time = time.time()
             sell_zone_armed = False
             return execute_scalp(symbol, "SELL", 0.35, curr_price, bb_up + (curr_atr), bb_mid, MAGIC_NUMBER)     
     return None
@@ -687,17 +681,16 @@ while True:
                 f"EMA9/200: {last['ema9']:.1f}/{last['ema200']:.1f} | "
                 f"PnL: ${pnl:.2f}"
             )
-        
+            # Calculate time since last activity
+            time_since_last_trade = time.time() - last_trade_time
 
-            if pnl <= -MAX_LOSS:
-                logger.error(f"!!! MAX LOSS HIT (${pnl:.2f}) !!! Closing all.")
-                close_all_positions(sym)
-                last_max_loss_time = time.time()
-                continue
-            # At the start of your Entry Logic:
-            if time.time() - last_max_loss_time < COOLDOWN_PERIOD:
-                logger.info("Cooldown After WIN or LOSS... waiting.")
-                continue
+            # 1. Cooldown Gatekeeper
+            if time_since_last_trade < COOLDOWN_PERIOD:
+                remaining = int(COOLDOWN_PERIOD - time_since_last_trade)
+                # Log every 60 seconds so the console isn't spammed
+                if remaining % 60 == 0:
+                    logger.info(f"COOLDOWN ACTIVE: {remaining}s remaining before next scan.")
+                continue # Skip the rest of the loop and start over
             hybrid_adx_bollinger(df,sym)
     except Exception as e:
         logger.error(f"Loop Error: {e}")
