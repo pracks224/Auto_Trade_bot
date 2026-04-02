@@ -36,6 +36,7 @@ active_trade_regime = None
 buy_zone_armed = None
 sell_zone_armed = None
 
+
 # Connect MT5
 if not mt5.initialize():
     logger.error("MT5 initialization failed")
@@ -225,7 +226,7 @@ def hybrid_adx_bollinger(df, symbol):
     # Use 3x ATR as the "Extreme" marker for Gold
     is_overstretched = stretch > (curr_atr * 2.0)
     candle_body = abs(last['close'] - last['open'])
-    logger.info(f"is_expanded {is_expanded} > is_trending {is_trending}")
+    logger.info(f"is_expanded {is_expanded} > is_trending {is_trending} is_overstretched {is_overstretched}")
     # --- 3. REASONING & LOGGING ---
     mode = "TREND" if (is_expanded and is_trending) else "RANGE"
     reason = "No setup"
@@ -261,42 +262,45 @@ def hybrid_adx_bollinger(df, symbol):
     # 2. Setup the Trigger with a Buffer
     trigger_buy = five_min_high + 0.10
     trigger_sell = five_min_low - 0.10
-
+    #gap_widening = False
     # --- Inside 4. EXECUTION LOGIC ---
     logger.info(f" GAP WIDENING {gap_widening} trigger_buy {trigger_buy} trigger_sell {trigger_sell} ")
     if  mode == "TREND" and gap_widening:
         # 2. TRIGGER PHASE (Wait for price action to confirm)
-        if curr_price > trigger_buy:
+        if curr_price > trigger_buy and not is_overstretched:
             sl_price = five_min_low - 0.05
             tp = curr_price+2
             last_trade_time = time.time() # Start 5-min cooldown
             logger.info(f"5-MIN BREAKOUT BUY: Price {curr_price} > High {five_min_high}")
-            return execute_scalp(symbol, "BUY", 0.57, curr_price, sl_price, tp, MAGIC_NUMBER_TRENDING)
+            return execute_scalp(symbol, "BUY", 0.01, curr_price, sl_price, tp, MAGIC_NUMBER_TRENDING)
 
-        elif curr_price < trigger_sell:
+        elif curr_price < trigger_sell and not is_overstretched:
             sl_price = five_min_high + 0.05
             tp=curr_price-2
             last_trade_time = time.time()
             logger.info(f"5-MIN BREAKOUT SELL: Price {curr_price} < Low {five_min_low}")
-            return execute_scalp(symbol, "SELL", 0.57, curr_price, sl_price, tp, MAGIC_NUMBER_TRENDING)
+            return execute_scalp(symbol, "SELL", 0.01, curr_price, sl_price, tp, MAGIC_NUMBER_TRENDING)
+        elif is_overstretched:
+            logger.warning(f"BREAKOUT IGNORED: Price is too overstretched ({stretch:.2f} > {curr_atr * 2.0:.2f})")
 
     elif mode == "RANGE":
         # --- THE DIAGNOSTIC LOGGER ---
         dist_to_low = curr_price - bb_low
         dist_to_up = bb_up - curr_price
         # 1. SETUP PARAMETERS
-        range_entry_buffer = 1.5
+        range_entry_buffer = 1.75
         # 1. Check if price is within the 'Active Zone'
         is_in_buy_zone = curr_price <= (bb_low + range_entry_buffer)
         is_in_sell_zone = curr_price >= (bb_up - range_entry_buffer)
 
         # 2. The Confirmation (The Hook)
-        is_turning_up = curr_price > prev_price
-        is_turning_down = curr_price < prev_price
-
+        is_turning_up = curr_price > prev_price+ 0.20
+        is_turning_down = curr_price < prev_price-0.20
+        
         logger.info(f"--- [RANGE CHECK] Price: {curr_price:.2f} | RSI: {curr_rsi:.1f} | "
                     f"Gap_Low: {dist_to_low:.2f} (Target: <{range_entry_buffer}) | "
                     f"Hook: {'UP' if is_turning_up else 'DOWN' if is_turning_down else 'FLAT'} ---")
+       
         if dist_to_low < 1.0: # Tight touch to the floor
             buy_zone_armed = True
             logger.info("BUY ZONE ARMED: Price hit floor. Waiting for break...")
@@ -305,18 +309,18 @@ def hybrid_adx_bollinger(df, symbol):
             sell_zone_armed = True
             logger.info("SELL ZONE ARMED: Price hit ceiling. Waiting for break...")
         # BUY LOGIC
-        if buy_zone_armed and is_turning_up and curr_rsi < 45:
+        if buy_zone_armed and is_turning_up and (28 < curr_rsi < 45):
             reason = "RANGE BUY: Hook confirmed in Zone"
             last_trade_time = time.time()
             buy_zone_armed = False
-            return execute_scalp(symbol, "BUY", 0.35, curr_price, bb_low - (curr_atr), bb_mid, MAGIC_NUMBER)
+            return execute_scalp(symbol, "BUY", 0.01, curr_price, bb_low - (curr_atr), bb_mid, MAGIC_NUMBER)
 
         # SELL LOGIC
         elif sell_zone_armed and is_turning_down and curr_rsi > 65:
             reason = "RANGE SELL: Hook confirmed in Zone"
             last_trade_time = time.time()
             sell_zone_armed = False
-            return execute_scalp(symbol, "SELL", 0.35, curr_price, bb_up + (curr_atr), bb_mid, MAGIC_NUMBER)     
+            return execute_scalp(symbol, "SELL", 0.01, curr_price, bb_up + (curr_atr), bb_mid, MAGIC_NUMBER)     
     return None
 
 
