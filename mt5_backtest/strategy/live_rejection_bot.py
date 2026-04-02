@@ -228,10 +228,10 @@ def hybrid_adx_bollinger(df, symbol):
     candle_body = abs(last['close'] - last['open'])
     logger.info(f"is_expanded {is_expanded} > is_trending {is_trending} is_overstretched {is_overstretched}")
     # --- 3. REASONING & LOGGING ---
-    mode = "TREND" if (is_expanded and is_trending) else "RANGE"
+    mode = "TREND" if (is_expanded or is_trending) else "RANGE"
     reason = "No setup"
     active_trade_regime = mode
-    if mode == "TREND":
+    if mode == "TREND":s
         if not gap_widening:
             reason = f"Gap not widening ({ema_gap:.2f} <= {prev_ema_gap:.2f})"
         elif ema9 > ema200:
