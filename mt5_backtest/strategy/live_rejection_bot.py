@@ -220,7 +220,7 @@ def hybrid_adx_bollinger(df, symbol):
 
     # Booleans for logic
     is_expanded  = df['bb_width'].iloc[-1] > (df['bb_width_avg'].iloc[-1] * 1.2)
-    is_trending  = curr_adx > 24
+    is_trending  = curr_adx > 25
     gap_widening = ema_gap > prev_ema_gap
     stretch = abs(curr_price - ema9)
     # Use 3x ATR as the "Extreme" marker for Gold
@@ -262,6 +262,9 @@ def hybrid_adx_bollinger(df, symbol):
     # 2. Setup the Trigger with a Buffer
     trigger_buy = five_min_high + 0.10
     trigger_sell = five_min_low - 0.10
+    # Calculate the 'Stretch' or 'Gap'
+    price_ema_gap = abs(curr_price - ema9)
+    is_too_tight = price_ema_gap < (curr_atr * 0.8)
     #gap_widening = False
     # --- Inside 4. EXECUTION LOGIC ---
     logger.info(f" GAP WIDENING {gap_widening} trigger_buy {trigger_buy} trigger_sell {trigger_sell} ")
@@ -301,11 +304,11 @@ def hybrid_adx_bollinger(df, symbol):
                     f"Gap_Low: {dist_to_low:.2f} (Target: <{range_entry_buffer}) | "
                     f"Hook: {'UP' if is_turning_up else 'DOWN' if is_turning_down else 'FLAT'} ---")
        
-        if dist_to_low < 1.0: # Tight touch to the floor
+        if dist_to_low < 1.0 and not is_too_tight: # Tight touch to the floor
             buy_zone_armed = True
             logger.info("BUY ZONE ARMED: Price hit floor. Waiting for break...")
 
-        if dist_to_up < 1.0: # Tight touch to the ceiling
+        if dist_to_up < 1.0 and not is_too_tight: # Tight touch to the ceiling
             sell_zone_armed = True
             logger.info("SELL ZONE ARMED: Price hit ceiling. Waiting for break...")
         # BUY LOGIC
