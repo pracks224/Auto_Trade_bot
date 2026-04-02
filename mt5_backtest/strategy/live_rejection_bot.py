@@ -231,7 +231,7 @@ def hybrid_adx_bollinger(df, symbol):
     mode = "TREND" if (is_expanded or is_trending) else "RANGE"
     reason = "No setup"
     active_trade_regime = mode
-    if mode == "TREND":s
+    if mode == "TREND":
         if not gap_widening:
             reason = f"Gap not widening ({ema_gap:.2f} <= {prev_ema_gap:.2f})"
         elif ema9 > ema200:
