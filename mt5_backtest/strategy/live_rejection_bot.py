@@ -176,7 +176,7 @@ def hybrid_adx_bollinger(df, symbol):
     if open_trend_pos:
         pos = open_trend_pos[0] # You mentioned you only have one trend position
         current_sl = pos.sl
-        trail_buffer = 0.3 # Small buffer to avoid 'noise'
+        trail_buffer = curr_atr * 0.3 # Small buffer to avoid 'noise'
         if pos.type == mt5.POSITION_TYPE_SELL:
             # New SL is the EMA9 plus our buffer
             suggested_sl = ema9 + trail_buffer    
@@ -202,7 +202,7 @@ def hybrid_adx_bollinger(df, symbol):
         else:
             structure_break = curr_price < (ema9 - 0.3)
             
-        if active_trade_regime == "TREND" and adx_weak or structure_break:
+        if active_trade_regime == "TREND" and (adx_weak or structure_break):
             reason = "WEAKNESS: ADX Low" if adx_weak else "WEAKNESS: EMA9 Break"
             logger.info(f"[EXIT] Closing Trend Position | {reason} | ADX: {curr_adx:.1f}")
             mt5.Close(symbol, ticket=pos.ticket)
@@ -224,7 +224,9 @@ def hybrid_adx_bollinger(df, symbol):
     gap_widening = ema_gap > prev_ema_gap
     stretch = abs(curr_price - ema9)
     # Use 3x ATR as the "Extreme" marker for Gold
-    is_overstretched = stretch > (curr_atr * 2.0)
+    is_overstretched = stretch > (curr_atr * 1.2)
+    # NEW REVERSAL STRATEGY
+    is_extreme_stretch = stretch > (curr_atr * 2.5) # Look for the 'Blow-off' top
     candle_body = abs(last['close'] - last['open'])
     logger.info(f"is_expanded {is_expanded} > is_trending {is_trending} is_overstretched {is_overstretched}")
     # --- 3. REASONING & LOGGING ---
@@ -268,24 +270,47 @@ def hybrid_adx_bollinger(df, symbol):
     #gap_widening = False
     # --- Inside 4. EXECUTION LOGIC ---
     logger.info(f" GAP WIDENING {gap_widening} trigger_buy {trigger_buy} trigger_sell {trigger_sell} ")
-    if  mode == "TREND" and gap_widening:
-        # 2. TRIGGER PHASE (Wait for price action to confirm)
-        if curr_price > trigger_buy and not is_overstretched:
-            sl_price = five_min_low - 0.05
-            tp = curr_price+2
-            last_trade_time = time.time() # Start 5-min cooldown
-            logger.info(f"5-MIN BREAKOUT BUY: Price {curr_price} > High {five_min_high}")
-            return execute_scalp(symbol, "BUY", 0.01, curr_price, sl_price, tp, MAGIC_NUMBER_TRENDING)
+    # --- TREND MODE EXECUTION ---
+    if mode == "TREND":
+        buy_zone_armed = False
+        sell_zone_armed = False
+        # CHECK 1: EXTREME OVERSTRETCH (The Peak Reversal)
+        # Why first? Because if we are at a blow-off top, we should NEVER buy a breakout.
+        if is_extreme_stretch and curr_rsi > 75 and is_turning_down:
+            reason = "COUNTER-TREND SELL: Extreme Overstretch"
+            logger.info(f"{mode} - {reason}")
+            sl = curr_price + (curr_atr * 1.0)
+            tp = ema9 
+            return execute_scalp(symbol, "SELL", 0.01, curr_price, sl, tp, MAGIC_NUMBER_TRENDING)
 
-        elif curr_price < trigger_sell and not is_overstretched:
-            sl_price = five_min_high + 0.05
-            tp=curr_price-2
-            last_trade_time = time.time()
-            logger.info(f"5-MIN BREAKOUT SELL: Price {curr_price} < Low {five_min_low}")
-            return execute_scalp(symbol, "SELL", 0.01, curr_price, sl_price, tp, MAGIC_NUMBER_TRENDING)
-        elif is_overstretched:
-            logger.warning(f"BREAKOUT IGNORED: Price is too overstretched ({stretch:.2f} > {curr_atr * 2.0:.2f})")
+        # CHECK 2: THE GOLDEN BOUNCE (EMA 200 Support)
+        # Why second? This offers the best Risk/Reward entry in your screenshot.
+        dist_to_ema200 = curr_price - ema200
+        if ema9 > ema200 and 0 <= dist_to_ema200 <= (curr_atr * 0.5):
+            if is_turning_up:
+                reason = "GOLDEN BOUNCE: Buying the EMA 200 Floor"
+                logger.info(f"{mode} - {reason}")
+                sl_price = ema200 - 0.50
+                tp = ema9 + 2.0 # Aim for a bit more than just EMA9
+                return execute_scalp(symbol, "BUY", 0.01, curr_price, sl_price, tp, MAGIC_NUMBER_TRENDING)
 
+        # CHECK 3: 5-MIN BREAKOUT (The Momentum Move)
+        # Only if the gap is widening and we aren't overstretched yet.
+        if gap_widening:
+            if curr_price > trigger_buy and not is_overstretched:
+                sl_price = five_min_low - 0.05
+                tp = curr_price + 3.0
+                return execute_scalp(symbol, "BUY", 0.01, curr_price, sl_price, tp, MAGIC_NUMBER_TRENDING)
+
+            elif curr_price < trigger_sell and not is_overstretched:
+                sl_price = five_min_high + 0.05
+                tp = curr_price - 2.0
+                return execute_scalp(symbol, "SELL", 0.01, curr_price, sl_price, tp, MAGIC_NUMBER_TRENDING)
+                
+            elif is_overstretched:
+                logger.warning(f"BREAKOUT IGNORED: Price too far from EMA9 ({stretch:.2f})")
+
+        # --- END TREND MODE --- 
     elif mode == "RANGE":
         # --- THE DIAGNOSTIC LOGGER ---
         dist_to_low = curr_price - bb_low
@@ -297,8 +322,9 @@ def hybrid_adx_bollinger(df, symbol):
         is_in_sell_zone = curr_price >= (bb_up - range_entry_buffer)
 
         # 2. The Confirmation (The Hook)
-        is_turning_up = curr_price > prev_price+ 0.20
-        is_turning_down = curr_price < prev_price-0.20
+        hook_buffer = curr_atr * 0.1 # Dynamic buffer
+        is_turning_up = curr_price > (prev_price+ hook_buffer)
+        is_turning_down = curr_price < (prev_price-hook_buffer)
         
         logger.info(f"--- [RANGE CHECK] Price: {curr_price:.2f} | RSI: {curr_rsi:.1f} | "
                     f"Gap_Low: {dist_to_low:.2f} (Target: <{range_entry_buffer}) | "
@@ -311,6 +337,8 @@ def hybrid_adx_bollinger(df, symbol):
         if dist_to_up < 1.0 and not is_too_tight: # Tight touch to the ceiling
             sell_zone_armed = True
             logger.info("SELL ZONE ARMED: Price hit ceiling. Waiting for break...")
+        if dist_to_low > 5.0: buy_zone_armed = False
+        if dist_to_up > 5.0: sell_zone_armed = False
         # BUY LOGIC
         if buy_zone_armed and is_turning_up and (28 < curr_rsi < 45):
             reason = "RANGE BUY: Hook confirmed in Zone"
@@ -345,25 +373,6 @@ def get_total_floating_pnl(symbol):
         
     return total_pnl
 
-def dynamic_lot(symbol, atr_value):
-    """Calculates lot size based on ATR but never exceeds 1.00 lot."""
-    base_lot = 0.5
-    # A risk divider of 2.0 or 3.0 will make the bot more conservative
-    risk_divider = 3 
-    
-    # Calculate the raw lot based on volatility
-    raw_lot = (base_lot * 20 / max(atr_value, 1.0)) / risk_divider
-    
-    # 1. Round to 2 decimals for MT5
-    lot = round(raw_lot, 2)
-    
-    # 2. APPLY THE 1.0 LOT CEILING (The most important part)
-    if lot > 1.0:
-        lot = 1.0
-        
-    # 3. Ensure it's at least the broker minimum (0.01)
-    return max(0.01, lot)
-
 def modify_sl(ticket, sl, tp=0.0):
     request = {
         "action": mt5.TRADE_ACTION_SLTP,
@@ -372,143 +381,6 @@ def modify_sl(ticket, sl, tp=0.0):
         "tp": round(tp, 2),
     }
     return mt5.order_send(request)
-
-def set_break_even(symbol, atr_value, multiplier=1.2,magic_num=MAGIC_NUMBER):
-    positions = mt5.positions_get(symbol=symbol, magic=magic_num)
-    if not positions: return
-    
-    for pos in positions:
-        tick = mt5.symbol_info_tick(symbol)
-        if pos.type == mt5.POSITION_TYPE_BUY:
-            if (tick.bid - pos.price_open) >= (atr_value * multiplier) and pos.sl < pos.price_open:
-                modify_sl(pos.ticket, pos.price_open + 0.10, pos.tp)
-        elif pos.type == mt5.POSITION_TYPE_SELL:
-            if (pos.price_open - tick.ask) >= (atr_value * multiplier) and (pos.sl > pos.price_open or pos.sl == 0):
-                modify_sl(pos.ticket, pos.price_open - 0.10, pos.tp)
-
-def update_trailing_stop(symbol, atr_value, trail_multiplier=1.5,magic_num=MAGIC_NUMBER):
-    positions = mt5.positions_get(symbol=symbol, magic=magic_num)
-    if not positions:
-        return
-
-    symbol_info = mt5.symbol_info(symbol)
-    digits = symbol_info.digits
-    # Gold (XAUUSD) often needs a wider trail than 1.5 ATR due to volatility
-    trail_dist = atr_value * trail_multiplier
-
-    for pos in positions:
-        tick = mt5.symbol_info_tick(symbol)
-        if not tick: continue
-        
-        new_sl = 0.0
-        current_sl = pos.sl
-
-        # BUY POSITION LOGIC
-        if pos.type == mt5.POSITION_TYPE_BUY:
-            target_sl = tick.bid - trail_dist
-            # Move UP if target is higher than current SL AND current price is moving away
-            if target_sl > current_sl + 0.05: # Minimal 5-cent move to avoid spam
-                new_sl = target_sl
-                
-        # SELL POSITION LOGIC
-        elif pos.type == mt5.POSITION_TYPE_SELL:
-            target_sl = tick.ask + trail_dist
-            # If current_sl is 0 (no SL) or the new target is LOWER than current SL
-            if current_sl == 0 or target_sl < current_sl - 0.05:
-                new_sl = target_sl
-
-        # Only send request if we have a valid update
-        if new_sl > 0:
-            # Final Safety: Ensure we don't move SL into a worse position than current price
-            # (Wait for price to move at least 1 ATR before trailing begins)
-            request = {
-                "action": mt5.TRADE_ACTION_SLTP,
-                "symbol": symbol,
-                "position": pos.ticket,
-                "sl": float(round(new_sl, digits)),
-                "tp": float(pos.tp),
-                "magic": MAGIC_NUMBER
-            }
-            
-            result = mt5.order_send(request)
-            if result.retcode == mt5.TRADE_RETCODE_DONE:
-                logger.info(f" TRAIL MOVED: {symbol} {pos.ticket} | New SL: {new_sl:.2f}")
-            else:
-                # This will tell you if you are too close to the price (Code 10016)
-                logger.warning(f" TRAIL REJECTED: {result.comment} (Code: {result.retcode})")
-
-
-def get_m15_structure(symbol, lookback=5):
-    # Fetch last 5 candles from M15
-    rates = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M15, 0, lookback)
-    if rates is None:
-        return None, None
-    
-    # Get highest high and lowest low of the M15 range
-    highs = [x['high'] for x in rates]
-    lows = [x['low'] for x in rates]
-    
-    return max(highs), min(lows)
-
-def place_trade(symbol, side, lot, price, atr_value, tp_multiplier=2.5):
-    """
-    Executes a trade using M15 structural levels for SL and ATR for TP.
-    """
-    # 1. Fetch the actual M15 High and Low coordinates
-    m15_high, m15_low = get_m15_structure(symbol, lookback=4)
-    
-    # Fallback safety: if M15 data fails, use a wide ATR stop
-    if m15_high is None or m15_low is None:
-        logger.warning("M15 structure not found. Falling back to ATR stops.")
-        m15_high = price + (atr_value * 3)
-        m15_low = price - (atr_value * 3)
-
-    # 2. Define SL and TP based on Direction
-    if side == "BUY":
-        # SL goes BELOW the structural low
-        sl = m15_low - 1.5 
-        # Safety: SL must be below entry price
-        if sl >= price:
-            sl = price - (atr_value * 2)
-            
-        tp = price + (atr_value * tp_multiplier)
-        type_mt5 = mt5.ORDER_TYPE_BUY
-    else:
-        # SELL: SL goes ABOVE the structural high (This fixes the Invalid Stop error)
-        sl = m15_high + 1.5 
-        # Safety: SL must be above entry price
-        if sl <= price:
-            sl = price + (atr_value * 2)
-            
-        tp = price - (atr_value * tp_multiplier)
-        type_mt5 = mt5.ORDER_TYPE_SELL
-
-    # 3. Build the Request
-    request = {
-        "action": mt5.TRADE_ACTION_DEAL,
-        "symbol": symbol,
-        "volume": float(lot),
-        "type": type_mt5,
-        "price": float(price),
-        "sl": float(round(sl, 2)), # Rounds to 2 decimals for Gold
-        "tp": float(round(tp, 2)),
-        "deviation": 10,
-        "magic": MAGIC_NUMBER,
-        "comment": "PRO Hybrid Bot",
-        "type_filling": mt5.ORDER_FILLING_FOK
-    }
-
-    # 4. Send Order
-    result = mt5.order_send(request)
-    
-    if result.retcode != mt5.TRADE_RETCODE_DONE:
-        # Detailed error logging helps debug "Invalid Stops"
-        logger.error(f" Trade failed: {result.comment} (SL: {sl}, TP: {tp}, Price: {price})")
-        return False
-        
-    logger.info(f" {symbol} {side} {lot} executed at {price} | SL: {sl} | TP: {tp}")
-    send_telegram(f" {side} {lot} {symbol} at {price}\nSL: {sl}\nTP: {tp}")
-    return True
 
 def close_all_positions(symbol,magic_num=MAGIC_NUMBER):
     positions = mt5.positions_get(symbol=symbol, magic=magic_num)
@@ -531,80 +403,6 @@ def close_all_positions(symbol,magic_num=MAGIC_NUMBER):
         }
         mt5.order_send(request)
 
-def rubber_band_strategy(df, symbol):
-    last = df.iloc[-1]
-    atr_v = last['atr']
-    
-    # 1. Trend Direction
-    is_uptrend = last['close'] > last['ema200']
-    is_downtrend = last['close'] < last['ema200']
-
-    # 2. Buy Trigger: Uptrend + Pullback + RSI Oversold
-    if is_uptrend and last['rsi'] < 32 and last['close'] < last['ema9']:
-        # Ensure we have a "Lower Wick" (Hammer-ish)
-        candle_bottom_wick = min(last['open'], last['close']) - last['low']
-        if candle_bottom_wick > (atr_v * 0.2):
-            tp = last['close'] + 1.2 # Tight $1.20 profit
-            sl = last['close'] - (atr_v * 1.5) # ATR based safety
-            return execute_scalp(symbol, "BUY", 0.5, last['close'], sl, tp)
-
-    # 3. Sell Trigger: Downtrend + Pop + RSI Overbought
-    elif is_downtrend and last['rsi'] > 68 and last['close'] > last['ema9']:
-        # Ensure we have an "Upper Wick" (Shooting Star-ish)
-        candle_top_wick = last['high'] - max(last['open'], last['close'])
-        if candle_top_wick > (atr_v * 0.2):
-            tp = last['close'] - 1.2
-            sl = last['close'] + (atr_v * 1.5)
-            return execute_scalp(symbol, "SELL", 0.5, last['close'], sl, tp)
-            
-    return False
-def check_big_candle_momentum(df, symbol, lot_size=1.0, tp_pips=10):
-    """
-    Refined Momentum: Only enters 'Big Candles' if RSI is NOT exhausted
-    and price is aligned with the EMA 200 trend.
-    """
-    last = df.iloc[-1]
-    
-    # 1. Core Data Points
-    candle_body = abs(last['close'] - last['open'])
-    atr_value = last['atr']
-    rsi_value = last['rsi']
-    ema_200 = last['ema200']
-    current_price = last['close']
-    
-    # 2. Basic Volatility Filter (Keep your existing ATR range)
-    if not (2.50 < atr_value < 4.50):
-        return False
-
-    # 3. Direction & Trend Logic
-    is_bullish = last['close'] > last['open']
-    
-    # NEW: Trend Alignment (Only Buy above EMA200, Sell below)
-    trend_ok = (is_bullish and current_price > ema_200) or (not is_bullish and current_price < ema_200)
-    
-    # NEW: Exhaustion Filter (The RSI "Cool-Off" Rule)
-    # Don't BUY if RSI > 70 (Overbought), Don't SELL if RSI < 30 (Oversold)
-    rsi_ok = (is_bullish and rsi_value < 70) or (not is_bullish and rsi_value > 30)
-
-    # 4. Final Execution Logic
-    if candle_body > atr_value and trend_ok and rsi_ok:
-        side = "BUY" if is_bullish else "SELL"
-        
-        # Calculate SL (Using your buffer logic)
-        sl = (last['low'] - 0.10) if is_bullish else (last['high'] + 0.10)
-        
-        # Calculate TP (I increased tp_pips slightly to 10 pips / 1.0 point for Gold)
-        tp_dist = tp_pips * 0.10 
-        tp = (current_price + tp_dist) if is_bullish else (current_price - tp_dist)
-        
-        logger.info(f" MOMENTUM EXECUTED: {side} @ {current_price} | RSI: {rsi_value:.1f} | Body: {candle_body:.2f}")
-        return execute_scalp(symbol, side, lot_size, current_price, sl, tp)
-    
-    # Log why we skipped (for debugging)
-    if candle_body > atr_value:
-        logger.warning(f" MOMENTUM SKIPPED: RSI ({rsi_value:.1f}) or Trend Alignment issues.")
-        
-    return False
 
 def execute_scalp(symbol, side, lot, price, sl, tp,magic=MAGIC_NUMBER):
     """Internal execution for the scalper logic"""
