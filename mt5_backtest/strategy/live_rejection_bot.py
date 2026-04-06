@@ -227,6 +227,7 @@ def hybrid_adx_bollinger(df, symbol):
     is_overstretched = stretch > (curr_atr * 1.2)
     # NEW REVERSAL STRATEGY
     is_extreme_stretch = stretch > (curr_atr * 2.5) # Look for the 'Blow-off' top
+    is_turning_down = (curr_price < df['open']) & (close < close.shift(1))
     candle_body = abs(last['close'] - last['open'])
     logger.info(f"is_expanded {is_expanded} > is_trending {is_trending} is_overstretched {is_overstretched}")
     # --- 3. REASONING & LOGGING ---
