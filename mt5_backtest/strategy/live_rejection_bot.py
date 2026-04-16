@@ -117,6 +117,7 @@ def hybrid_adx_bollinger(df, symbol):
     global sell_zone_armed
     # EMAs
     df['ema9'] = df['close'].ewm(span=9, adjust=False).mean()
+    df['ema13'] = df['close'].ewm(span=13, adjust=False).mean()
     df['ema30'] = df['close'].ewm(span=30, adjust=False).mean()
     df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
 
@@ -161,6 +162,7 @@ def hybrid_adx_bollinger(df, symbol):
     curr_rsi   = df['rsi'].iloc[-1]
     curr_atr   = df['atr_smooth'].iloc[-1]  # This is a float now
     ema9       = df['ema9'].iloc[-1]
+    ema13      = df['ema13'].iloc[-1]
     ema30      = df['ema30'].iloc[-1]
     ema200     = df['ema200'].iloc[-1]
     bb_up      = df['bb_upper'].iloc[-1]
@@ -176,18 +178,19 @@ def hybrid_adx_bollinger(df, symbol):
     if open_trend_pos:
         pos = open_trend_pos[0] # You mentioned you only have one trend position
         current_sl = pos.sl
-        trail_buffer = curr_atr * 0.3 # Small buffer to avoid 'noise'
+        trail_buffer = curr_atr * 3.5 # Small buffer to avoid 'noise'
         if pos.type == mt5.POSITION_TYPE_SELL:
             # New SL is the EMA9 plus our buffer
-            suggested_sl = ema9 + trail_buffer    
+            suggested_sl = ema30 + trail_buffer   
+            logger.info(f"{current_sl} FOR SELL NEW SL | {suggested_sl}") 
             # Only modify if the new SL is LOWER than the current one (Locking profit)
             if suggested_sl < current_sl or current_sl == 0:
                 modify_sl(pos.ticket, suggested_sl)
 
         elif pos.type == mt5.POSITION_TYPE_BUY:
             # New SL is the EMA9 minus our buffer
-            suggested_sl = ema9 - trail_buffer
-            
+            suggested_sl = ema30 - trail_buffer
+            logger.info(f"{current_sl} FOR BUY NEW SL | {suggested_sl}")
             # Only modify if the new SL is HIGHER than the current one
             if suggested_sl > current_sl or current_sl == 0:
                 modify_sl(pos.ticket, suggested_sl)
@@ -226,8 +229,12 @@ def hybrid_adx_bollinger(df, symbol):
     # Use 3x ATR as the "Extreme" marker for Gold
     is_overstretched = stretch > (curr_atr * 1.2)
     # NEW REVERSAL STRATEGY
-    is_extreme_stretch = stretch > (curr_atr * 2.5) # Look for the 'Blow-off' top
-    is_turning_down = (curr_price < df['open']) & (close < close.shift(1))
+    open_price = df['open'].iloc[-1]
+    
+    # 2. Define the 'Trifecta' variables
+    is_turning_down = (curr_price < open_price) and (curr_price < df['close'].iloc[-2])
+    is_extreme_stretch = stretch > (curr_atr * 2.5) 
+    
     candle_body = abs(last['close'] - last['open'])
     logger.info(f"is_expanded {is_expanded} > is_trending {is_trending} is_overstretched {is_overstretched}")
     # --- 3. REASONING & LOGGING ---
@@ -280,9 +287,9 @@ def hybrid_adx_bollinger(df, symbol):
         if is_extreme_stretch and curr_rsi > 75 and is_turning_down:
             reason = "COUNTER-TREND SELL: Extreme Overstretch"
             logger.info(f"{mode} - {reason}")
-            sl = curr_price + (curr_atr * 1.0)
+            sl = curr_price + (curr_atr * 10)
             tp = ema9 
-            return execute_scalp(symbol, "SELL", 0.01, curr_price, sl, tp, MAGIC_NUMBER_TRENDING)
+            return execute_scalp(symbol, "SELL", 0.05, curr_price, sl, tp, MAGIC_NUMBER_TRENDING)
 
         # CHECK 2: THE GOLDEN BOUNCE (EMA 200 Support)
         # Why second? This offers the best Risk/Reward entry in your screenshot.
@@ -293,20 +300,20 @@ def hybrid_adx_bollinger(df, symbol):
                 logger.info(f"{mode} - {reason}")
                 sl_price = ema200 - 0.50
                 tp = ema9 + 2.0 # Aim for a bit more than just EMA9
-                return execute_scalp(symbol, "BUY", 0.01, curr_price, sl_price, tp, MAGIC_NUMBER_TRENDING)
+                return execute_scalp(symbol, "BUY", 0.05, curr_price, sl_price, tp, MAGIC_NUMBER_TRENDING)
 
         # CHECK 3: 5-MIN BREAKOUT (The Momentum Move)
         # Only if the gap is widening and we aren't overstretched yet.
         if gap_widening:
             if curr_price > trigger_buy and not is_overstretched:
                 sl_price = five_min_low - 0.05
-                tp = curr_price + 3.0
-                return execute_scalp(symbol, "BUY", 0.01, curr_price, sl_price, tp, MAGIC_NUMBER_TRENDING)
+                tp = curr_price + 10.0
+                return execute_scalp(symbol, "BUY", 0.05, curr_price, sl_price, tp, MAGIC_NUMBER_TRENDING)
 
             elif curr_price < trigger_sell and not is_overstretched:
                 sl_price = five_min_high + 0.05
-                tp = curr_price - 2.0
-                return execute_scalp(symbol, "SELL", 0.01, curr_price, sl_price, tp, MAGIC_NUMBER_TRENDING)
+                tp = curr_price - 10.0
+                return execute_scalp(symbol, "SELL", 0.05, curr_price, sl_price, tp, MAGIC_NUMBER_TRENDING)
                 
             elif is_overstretched:
                 logger.warning(f"BREAKOUT IGNORED: Price too far from EMA9 ({stretch:.2f})")
@@ -345,14 +352,14 @@ def hybrid_adx_bollinger(df, symbol):
             reason = "RANGE BUY: Hook confirmed in Zone"
             last_trade_time = time.time()
             buy_zone_armed = False
-            return execute_scalp(symbol, "BUY", 0.01, curr_price, bb_low - (curr_atr), bb_mid, MAGIC_NUMBER)
+            return execute_scalp(symbol, "BUY", 0.02, curr_price, bb_low - (curr_atr), bb_mid, MAGIC_NUMBER)
 
         # SELL LOGIC
         elif sell_zone_armed and is_turning_down and curr_rsi > 65:
             reason = "RANGE SELL: Hook confirmed in Zone"
             last_trade_time = time.time()
             sell_zone_armed = False
-            return execute_scalp(symbol, "SELL", 0.01, curr_price, bb_up + (curr_atr), bb_mid, MAGIC_NUMBER)     
+            return execute_scalp(symbol, "SELL", 0.02, curr_price, bb_up + (curr_atr), bb_mid, MAGIC_NUMBER)     
     return None
 
 
