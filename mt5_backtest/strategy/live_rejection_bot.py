@@ -178,7 +178,7 @@ def hybrid_adx_bollinger(df, symbol):
     if open_trend_pos:
         pos = open_trend_pos[0] # You mentioned you only have one trend position
         current_sl = pos.sl
-        trail_buffer = curr_atr * 3.5 # Small buffer to avoid 'noise'
+        trail_buffer = curr_atr * 1.75 # Small buffer to avoid 'noise'
         if pos.type == mt5.POSITION_TYPE_SELL:
             # New SL is the EMA9 plus our buffer
             suggested_sl = ema30 + trail_buffer   
@@ -198,12 +198,14 @@ def hybrid_adx_bollinger(df, symbol):
         # WEAKNESS LOGIC
         # 1. ADX Drop: Trend is turning into a Range
         adx_weak = curr_adx < 22 
+        last_close = df['close'].iloc[-1]
+        last_ema9 = df['ema9'].iloc[-1]
         # 2. Structural Break: Price crossed the EMA9 "Ceiling/Floor"
         structure_break = False
         if pos.type == mt5.POSITION_TYPE_SELL:
-            structure_break = curr_price > (ema9 + 0.3)
+            structure_break = last_close > (last_ema9 + 0.3)
         else:
-            structure_break = curr_price < (ema9 - 0.3)
+            structure_break = last_close < (last_ema9 - 0.3)
             
         if active_trade_regime == "TREND" and (adx_weak or structure_break):
             reason = "WEAKNESS: ADX Low" if adx_weak else "WEAKNESS: EMA9 Break"
@@ -232,6 +234,7 @@ def hybrid_adx_bollinger(df, symbol):
     open_price = df['open'].iloc[-1]
     
     # 2. Define the 'Trifecta' variables
+    is_turning_up = (curr_price > open_price) and (curr_price > df['close'].iloc[-2])
     is_turning_down = (curr_price < open_price) and (curr_price < df['close'].iloc[-2])
     is_extreme_stretch = stretch > (curr_atr * 2.5) 
     
@@ -287,9 +290,9 @@ def hybrid_adx_bollinger(df, symbol):
         if is_extreme_stretch and curr_rsi > 75 and is_turning_down:
             reason = "COUNTER-TREND SELL: Extreme Overstretch"
             logger.info(f"{mode} - {reason}")
-            sl = curr_price + (curr_atr * 10)
-            tp = ema9 
-            return execute_scalp(symbol, "SELL", 0.05, curr_price, sl, tp, MAGIC_NUMBER_TRENDING)
+            sl = curr_price + (curr_atr * 2.0)
+            tp = curr_price - (curr_atr * 2.0) 
+            return execute_scalp(symbol, "SELL", 0.07, curr_price, sl, tp, MAGIC_NUMBER_TRENDING)
 
         # CHECK 2: THE GOLDEN BOUNCE (EMA 200 Support)
         # Why second? This offers the best Risk/Reward entry in your screenshot.
@@ -298,22 +301,22 @@ def hybrid_adx_bollinger(df, symbol):
             if is_turning_up:
                 reason = "GOLDEN BOUNCE: Buying the EMA 200 Floor"
                 logger.info(f"{mode} - {reason}")
-                sl_price = ema200 - 0.50
-                tp = ema9 + 2.0 # Aim for a bit more than just EMA9
-                return execute_scalp(symbol, "BUY", 0.05, curr_price, sl_price, tp, MAGIC_NUMBER_TRENDING)
+                sl = curr_price - (curr_atr * 2.0)
+                tp = curr_price + (curr_atr * 2.0)
+                return execute_scalp(symbol, "BUY", 0.07, curr_price, sl, tp, MAGIC_NUMBER_TRENDING)
 
         # CHECK 3: 5-MIN BREAKOUT (The Momentum Move)
         # Only if the gap is widening and we aren't overstretched yet.
         if gap_widening:
             if curr_price > trigger_buy and not is_overstretched:
-                sl_price = five_min_low - 0.05
+                sl_price = five_min_low - 0.1
                 tp = curr_price + 10.0
-                return execute_scalp(symbol, "BUY", 0.05, curr_price, sl_price, tp, MAGIC_NUMBER_TRENDING)
+                return execute_scalp(symbol, "BUY", 0.06, curr_price, sl_price, tp, MAGIC_NUMBER_TRENDING)
 
             elif curr_price < trigger_sell and not is_overstretched:
-                sl_price = five_min_high + 0.05
+                sl_price = five_min_high + 0.1
                 tp = curr_price - 10.0
-                return execute_scalp(symbol, "SELL", 0.05, curr_price, sl_price, tp, MAGIC_NUMBER_TRENDING)
+                return execute_scalp(symbol, "SELL", 0.06, curr_price, sl_price, tp, MAGIC_NUMBER_TRENDING)
                 
             elif is_overstretched:
                 logger.warning(f"BREAKOUT IGNORED: Price too far from EMA9 ({stretch:.2f})")
@@ -333,6 +336,9 @@ def hybrid_adx_bollinger(df, symbol):
         hook_buffer = curr_atr * 0.1 # Dynamic buffer
         is_turning_up = curr_price > (prev_price+ hook_buffer)
         is_turning_down = curr_price < (prev_price-hook_buffer)
+        confirmed_hook_down = is_turning_down and (curr_price < bb_up)
+        confirmed_hook_up = is_turning_up and (curr_price > bb_low)
+        
         
         logger.info(f"--- [RANGE CHECK] Price: {curr_price:.2f} | RSI: {curr_rsi:.1f} | "
                     f"Gap_Low: {dist_to_low:.2f} (Target: <{range_entry_buffer}) | "
@@ -348,18 +354,20 @@ def hybrid_adx_bollinger(df, symbol):
         if dist_to_low > 5.0: buy_zone_armed = False
         if dist_to_up > 5.0: sell_zone_armed = False
         # BUY LOGIC
-        if buy_zone_armed and is_turning_up and (28 < curr_rsi < 45):
+        if buy_zone_armed and confirmed_hook_up and (28 < curr_rsi < 45):
             reason = "RANGE BUY: Hook confirmed in Zone"
             last_trade_time = time.time()
             buy_zone_armed = False
-            return execute_scalp(symbol, "BUY", 0.02, curr_price, bb_low - (curr_atr), bb_mid, MAGIC_NUMBER)
+            logger.info(f"RANGE BUY REASON {reason}")
+            return execute_scalp(symbol, "BUY", 0.05, curr_price, bb_low - (curr_atr*1.2), bb_mid, MAGIC_NUMBER)
 
         # SELL LOGIC
-        elif sell_zone_armed and is_turning_down and curr_rsi > 65:
+        elif sell_zone_armed and confirmed_hook_down and curr_rsi > 65:
             reason = "RANGE SELL: Hook confirmed in Zone"
             last_trade_time = time.time()
             sell_zone_armed = False
-            return execute_scalp(symbol, "SELL", 0.02, curr_price, bb_up + (curr_atr), bb_mid, MAGIC_NUMBER)     
+            logger.info(f"RANGE SELL: REASON {reason}")
+            return execute_scalp(symbol, "SELL", 0.05, curr_price, bb_up + (curr_atr*1.2), bb_mid, MAGIC_NUMBER)     
     return None
 
 
