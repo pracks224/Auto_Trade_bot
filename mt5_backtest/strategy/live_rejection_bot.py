@@ -176,16 +176,18 @@ def hybrid_adx_bollinger(df, symbol):
     open_trend_pos = mt5.positions_get(symbol=symbol, magic=MAGIC_NUMBER_TRENDING)
     #logger.info(f"Filtered Trend Count (Magic {MAGIC_NUMBER_TRENDING}): {len(open_trend_pos)}")
     if open_trend_pos:
-        pos = open_trend_pos[0] # You mentioned you only have one trend position
+        pos = open_trend_pos[0]
+        logger.info(f"Checking SL for Ticket: {pos.ticket} | Magic: {pos.magic} | Expected Trend Magic: {MAGIC_NUMBER_TRENDING}")
         current_sl = pos.sl
-        trail_buffer = curr_atr * 1.75 # Small buffer to avoid 'noise'
+        current_tp = pos.tp
+        trail_buffer = curr_atr * 2.00
         if pos.type == mt5.POSITION_TYPE_SELL:
             # New SL is the EMA9 plus our buffer
             suggested_sl = ema30 + trail_buffer   
             logger.info(f"{current_sl} FOR SELL NEW SL | {suggested_sl}") 
             # Only modify if the new SL is LOWER than the current one (Locking profit)
             if suggested_sl < current_sl or current_sl == 0:
-                modify_sl(pos.ticket, suggested_sl)
+                modify_sl(pos.ticket, suggested_sl,current_tp)
 
         elif pos.type == mt5.POSITION_TYPE_BUY:
             # New SL is the EMA9 minus our buffer
@@ -193,7 +195,7 @@ def hybrid_adx_bollinger(df, symbol):
             logger.info(f"{current_sl} FOR BUY NEW SL | {suggested_sl}")
             # Only modify if the new SL is HIGHER than the current one
             if suggested_sl > current_sl or current_sl == 0:
-                modify_sl(pos.ticket, suggested_sl)
+                modify_sl(pos.ticket, suggested_sl,current_tp)
         
         # WEAKNESS LOGIC
         # 1. ADX Drop: Trend is turning into a Range
@@ -432,10 +434,10 @@ def execute_scalp(symbol, side, lot, price, sl, tp,magic=MAGIC_NUMBER):
         "price": float(price),
         "sl": float(round(sl, 2)),
         "tp": float(round(tp, 2)),
-        "magic": magic, # Unique ID for scalp trades
+        "magic": magic,
         "comment": "BigCandle_Scalp",
         "type_filling": mt5.ORDER_FILLING_FOK,
-        "deviation": 3 # Tight deviation for fast moves
+        "deviation": 3
     }
     
     result = mt5.order_send(request)
