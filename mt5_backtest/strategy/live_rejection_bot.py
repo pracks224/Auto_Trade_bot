@@ -292,33 +292,31 @@ def hybrid_adx_bollinger(df, symbol):
         if is_extreme_stretch and curr_rsi > 75 and is_turning_down:
             reason = "COUNTER-TREND SELL: Extreme Overstretch"
             logger.info(f"{mode} - {reason}")
-            sl = curr_price + (curr_atr * 2.0)
-            tp = curr_price - (curr_atr * 2.0) 
+            sl = curr_price + (curr_atr * 2.5)
+            tp = curr_price - (curr_atr * 3.0) 
             return execute_scalp(symbol, "SELL", 0.07, curr_price, sl, tp, MAGIC_NUMBER_TRENDING)
-
-        # CHECK 2: THE GOLDEN BOUNCE (EMA 200 Support)
-        # Why second? This offers the best Risk/Reward entry in your screenshot.
-        dist_to_ema200 = curr_price - ema200
-        if ema9 > ema200 and 0 <= dist_to_ema200 <= (curr_atr * 0.5):
-            if is_turning_up:
-                reason = "GOLDEN BOUNCE: Buying the EMA 200 Floor"
-                logger.info(f"{mode} - {reason}")
-                sl = curr_price - (curr_atr * 2.0)
-                tp = curr_price + (curr_atr * 2.0)
-                return execute_scalp(symbol, "BUY", 0.07, curr_price, sl, tp, MAGIC_NUMBER_TRENDING)
+        
+        # Catching the bottom (The one you missed at RSI 8.4!)
+        elif is_extreme_stretch and curr_rsi < 25 and is_turning_up:
+            reason = "COUNTER-TREND BUY: RSI Oversold Exhaustion"
+            logger.info(f"{mode} - {reason}")
+            sl = curr_price - (curr_atr * 2.5)
+            tp = curr_price + (curr_atr * 3.0)
+            return execute_scalp(symbol, "BUY", 0.07, curr_price, sl, tp, MAGIC_NUMBER_TRENDING)
+   
 
         # CHECK 3: 5-MIN BREAKOUT (The Momentum Move)
         # Only if the gap is widening and we aren't overstretched yet.
         if gap_widening:
             if curr_price > trigger_buy and not is_overstretched:
                 sl_price = five_min_low - 0.1
-                tp = curr_price + 10.0
-                return execute_scalp(symbol, "BUY", 0.06, curr_price, sl_price, tp, MAGIC_NUMBER_TRENDING)
+                tp = curr_price + 8.0
+                return execute_scalp(symbol, "BUY", 0.08, curr_price, sl_price, tp, MAGIC_NUMBER_TRENDING)
 
             elif curr_price < trigger_sell and not is_overstretched:
                 sl_price = five_min_high + 0.1
-                tp = curr_price - 10.0
-                return execute_scalp(symbol, "SELL", 0.06, curr_price, sl_price, tp, MAGIC_NUMBER_TRENDING)
+                tp = curr_price - 8.0
+                return execute_scalp(symbol, "SELL", 0.08, curr_price, sl_price, tp, MAGIC_NUMBER_TRENDING)
                 
             elif is_overstretched:
                 logger.warning(f"BREAKOUT IGNORED: Price too far from EMA9 ({stretch:.2f})")
@@ -361,7 +359,7 @@ def hybrid_adx_bollinger(df, symbol):
             last_trade_time = time.time()
             buy_zone_armed = False
             logger.info(f"RANGE BUY REASON {reason}")
-            return execute_scalp(symbol, "BUY", 0.05, curr_price, bb_low - (curr_atr*1.2), bb_mid, MAGIC_NUMBER)
+            return execute_scalp(symbol, "BUY", 0.09, curr_price, bb_low - (curr_atr*1.2), bb_mid, MAGIC_NUMBER)
 
         # SELL LOGIC
         elif sell_zone_armed and confirmed_hook_down and curr_rsi > 65:
@@ -369,7 +367,7 @@ def hybrid_adx_bollinger(df, symbol):
             last_trade_time = time.time()
             sell_zone_armed = False
             logger.info(f"RANGE SELL: REASON {reason}")
-            return execute_scalp(symbol, "SELL", 0.05, curr_price, bb_up + (curr_atr*1.2), bb_mid, MAGIC_NUMBER)     
+            return execute_scalp(symbol, "SELL", 0.09, curr_price, bb_up + (curr_atr*1.2), bb_mid, MAGIC_NUMBER)     
     return None
 
 
